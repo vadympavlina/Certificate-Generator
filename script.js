@@ -12,7 +12,7 @@ function nextN() { const n=getN()+1; localStorage.setItem('cn',n); return String
 
 // ── State ─────────────────────────────────────────────
 const ST = {
-  tplBytes:null, bulkTplBytes:null, excelRows:[],
+  tplBytes:null, bulkTplBytes:null, tplName:'', excelRows:[],
   placements:{},          // { field: {x,y,size,color,bold,align} }
   canvasW:1, canvasH:1,
   pdfW:842, pdfH:595,
@@ -73,12 +73,12 @@ function mkUpload({dzId,inId,chId,nmId,rmId,onLoad,onClear}){
   }
 }
 mkUpload({dzId:'dz-tpl',inId:'in-tpl',chId:'ch-tpl',nmId:'ch-tpl-name',rmId:'rm-tpl',
-  onLoad:async(bytes,name)=>{ST.tplBytes=bytes;ST.placements={};toast(`Шаблон "${name}" завантажено`,'ok');await openEditor(bytes,false);renderPreview();},
+  onLoad:async(bytes,name)=>{ST.tplBytes=bytes;ST.tplName=name;ST.placements={};toast(`Шаблон "${name}" завантажено`,'ok');await openEditor(bytes,false);renderPreview();},
   onClear:()=>{ST.tplBytes=null;ST.placements={};renderPreview();}
 });
 $('btn-edit-tpl').addEventListener('click',()=>{if(ST.tplBytes)openEditor(ST.tplBytes,false);});
 mkUpload({dzId:'dz-bulk-tpl',inId:'in-bulk-tpl',chId:'ch-bulk-tpl',nmId:'ch-bulk-tpl-name',rmId:'rm-bulk-tpl',
-  onLoad:async(bytes,name)=>{ST.bulkTplBytes=bytes;toast(`Шаблон "${name}" завантажено`,'ok');await openEditor(bytes,true);},
+  onLoad:async(bytes,name)=>{ST.bulkTplBytes=bytes;ST.tplName=name;toast(`Шаблон "${name}" завантажено`,'ok');await openEditor(bytes,true);},
   onClear:()=>{ST.bulkTplBytes=null;}
 });
 $('btn-edit-bulk-tpl').addEventListener('click',()=>{if(ST.bulkTplBytes)openEditor(ST.bulkTplBytes,true);});
@@ -785,6 +785,125 @@ async function autoPreviewBulk(){
     await renderToBox(bytes,'bulk-prev-box');
   }catch(e){console.warn('bulk preview:',e);}
 }
+
+
+// ══════════════════════════════════════════════════════
+//   PRESET EXPORT / IMPORT
+// ══════════════════════════════════════════════════════
+
+function exportPreset() {
+  const keys = Object.keys(ST.placements);
+  if (!keys.length) { toast('⚠️ Немає розміщених полів для збереження', 'err'); return; }
+
+  // Build preset with normalized 0-1 coordinates
+  // (independent of canvas size / zoom / screen resolution)
+  const preset = {
+    version: 1,
+    app: 'ITSTEP Certificate Generator',
+    created: new Date().toLocaleString('uk-UA'),
+    template: ST.tplName || 'unknown',
+    pdfSize: { w: Math.round(ST.pdfW), h: Math.round(ST.pdfH) },
+    fields: {},
+  };
+
+  for (const [f, pl] of Object.entries(ST.placements)) {
+    preset.fields[f] = {
+      xNorm:  +(pl.x / ST.canvasW).toFixed(5),
+      yNorm:  +(pl.y / ST.canvasH).toFixed(5),
+      size:   pl.size,
+      bold:   pl.bold  ?? FIELD_META[f].defBold,
+      color:  pl.color || '#111111',
+      align:  pl.align || 'center',
+    };
+  }
+
+  const json  = JSON.stringify(preset, null, 2);
+  const tplBase = (ST.tplName || 'preset').replace(/\.[^.]+$/, '');
+  const fname = `preset_${tplBase}_${new Date().toISOString().slice(0,10)}.json`;
+  dlBlob(new Blob([json], { type: 'application/json' }), fname);
+  toast(`✅ Пресет збережено: ${keys.length} полів`, 'ok');
+}
+
+function importPreset(file) {
+  const fr = new FileReader();
+  fr.onerror = () => toast('❌ Не вдалося прочитати файл', 'err');
+  fr.onload = e => {
+    let preset;
+    try { preset = JSON.parse(e.target.result); }
+    catch { toast('❌ Невірний JSON файл', 'err'); return; }
+
+    // Validate structure
+    if (!preset.version || typeof preset.fields !== 'object') {
+      toast('❌ Невірний формат пресету', 'err'); return;
+    }
+    const validFields = Object.keys(FIELD_META);
+    const incoming = Object.entries(preset.fields)
+      .filter(([f, d]) => validFields.includes(f)
+        && typeof d.xNorm === 'number' && typeof d.yNorm === 'number');
+
+    if (!incoming.length) {
+      toast('❌ Пресет не містить жодного відомого поля', 'err'); return;
+    }
+
+    // Warn if PDF dimensions differ significantly (>5%)
+    if (preset.pdfSize && ST.pdfW) {
+      const diffW = Math.abs(preset.pdfSize.w - ST.pdfW) / ST.pdfW;
+      const diffH = Math.abs(preset.pdfSize.h - ST.pdfH) / ST.pdfH;
+      if (diffW > 0.05 || diffH > 0.05) {
+        const ok = confirm(
+          `⚠️ Розмір поточного шаблону (${Math.round(ST.pdfW)}×${Math.round(ST.pdfH)} pt) ` +
+          `відрізняється від шаблону в пресеті (${preset.pdfSize.w}×${preset.pdfSize.h} pt).
+
+` +
+          `Координати будуть масштабовані пропорційно. Продовжити?`
+        );
+        if (!ok) return;
+      }
+    }
+
+    // Clear existing placements & markers
+    [...Object.keys(ST.placements)].forEach(f => removeMarker(f));
+
+    // Apply incoming fields
+    let count = 0;
+    for (const [f, data] of incoming) {
+      const x = data.xNorm * ST.canvasW;
+      const y = data.yNorm * ST.canvasH;
+      // Pre-populate placement so addMarker keeps these values
+      ST.placements[f] = {
+        x, y,
+        size:  data.size  ?? FIELD_META[f].defSize,
+        bold:  data.bold  ?? FIELD_META[f].defBold,
+        color: data.color || '#111111',
+        align: data.align || 'center',
+      };
+      addMarker(f, x, y);
+      // Flash the field item to show it was loaded
+      setTimeout(() => {
+        const item = $(`fi-${f}`);
+        if (item) { item.classList.add('preset-loaded'); setTimeout(() => item.classList.remove('preset-loaded'), 900); }
+      }, 50 * count);
+      count++;
+    }
+
+    // Show summary
+    const fieldNames = incoming.map(([f]) => FIELD_META[f].label).join(', ');
+    const fromTpl = preset.template && preset.template !== 'unknown' ? ` (з "${preset.template}")` : '';
+    toast(`✅ Завантажено ${count} полів${fromTpl}: ${fieldNames}`, 'ok');
+
+    // Refresh preview if not bulk
+    if (!ST.editorIsBulk) setTimeout(renderPreview, 100);
+  };
+  fr.readAsText(file);
+}
+
+// ── Preset event listeners ────────────────────────────
+$('btn-export-preset').addEventListener('click', exportPreset);
+$('btn-import-preset').addEventListener('click', () => $('in-preset').click());
+$('in-preset').addEventListener('change', e => {
+  const file = e.target.files[0];
+  if (file) { importPreset(file); e.target.value = ''; }
+});
 
 // ── Excel parser ──────────────────────────────────────
 function parseExcel(buf){

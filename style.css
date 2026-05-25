@@ -484,3 +484,51 @@ main{max-width:1240px;margin:0 auto;padding:28px 28px 80px}
 ::-webkit-scrollbar{width:6px;height:6px}
 ::-webkit-scrollbar-track{background:transparent}
 ::-webkit-scrollbar-thumb{background:var(--border2);border-radius:3px}
+
+/* ── PRESET BAR ─────────────────────────────────────── */
+.preset-bar{
+  margin-top:auto;
+  padding-top:12px;
+  border-top:1px solid var(--border);
+  display:flex;flex-direction:column;gap:6px;
+}
+.preset-bar-label{
+  display:flex;align-items:center;gap:6px;
+  font-size:10px;font-weight:800;text-transform:uppercase;
+  letter-spacing:.08em;color:var(--text3);padding:0 2px;
+}
+.preset-btn{
+  display:flex;align-items:center;justify-content:center;gap:7px;
+  padding:9px 10px;border-radius:8px;
+  font-family:var(--font);font-size:11px;font-weight:700;
+  cursor:pointer;transition:all .18s;width:100%;
+  white-space:nowrap;
+}
+.preset-export{
+  background:var(--blue-l);
+  border:1.5px solid #c8daf8;
+  color:var(--blue);
+}
+.preset-export:hover{
+  background:var(--blue);color:#fff;
+  border-color:var(--blue);
+  box-shadow:0 2px 8px rgba(26,86,219,.25);
+}
+.preset-import{
+  background:#fff;
+  border:1.5px solid var(--border2);
+  color:var(--text2);
+}
+.preset-import:hover{
+  border-color:var(--blue);color:var(--blue);
+  background:var(--blue-l);
+}
+
+/* Import success flash */
+@keyframes preset-flash{
+  0%{background:rgba(22,163,74,.15)}
+  100%{background:transparent}
+}
+.fi.preset-loaded{
+  animation:preset-flash .8s ease-out;
+}
