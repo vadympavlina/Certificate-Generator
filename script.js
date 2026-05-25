@@ -87,11 +87,7 @@ mkUpload({dzId:'dz-excel',inId:'in-excel',chId:'ch-excel',nmId:'ch-excel-name',r
   onClear:()=>{ST.excelRows=[];$('stbox').style.display='none';$('btn-bulk').disabled=true;clearCanvas('bulk-prev-box');}
 });
 
-// ── Style sliders ─────────────────────────────────────
-[['s-ns','s-ns-v','ns'],['s-gs','s-gs-v','gs'],['s-bs','s-bs-v','bs']].forEach(([id,vid,k])=>{
-  $(id).addEventListener('input',e=>{ST.style[k]=+e.target.value;$(vid).textContent=e.target.value;renderPreview();});
-});
-$('s-col').addEventListener('input',e=>{ST.style.color=e.target.value;$('s-col-v').textContent=e.target.value;renderPreview();});
+// Style defaults fixed (no sliders — per-field settings in editor)
 
 // ── Live preview + marker text update ─────────────────
 ['f-name','f-period','f-grade'].forEach(id=>{
