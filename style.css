@@ -109,7 +109,17 @@ input[type="color"]{width:40px;height:34px;padding:2px;border:1.5px solid var(--
 .modal-x{background:var(--bg);border:none;cursor:pointer;width:30px;height:30px;border-radius:50%;font-size:13px;color:var(--text2);display:flex;align-items:center;justify-content:center;flex-shrink:0;transition:all .15s}
 .modal-x:hover{background:#fee2e2;color:var(--red)}
 .modal-body{flex:1;display:flex;overflow:hidden;min-height:0}
-.modal-foot{display:flex;align-items:center;justify-content:flex-end;gap:10px;padding:12px 22px;border-top:1px solid var(--border);flex-shrink:0}
+.modal-foot{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:12px 22px;border-top:1px solid var(--border);flex-shrink:0}
+.kbd-hint{
+  font-size:11px;color:var(--text3);flex:1;text-align:center;line-height:1.5;
+}
+.kbd-hint span{
+  display:inline-block;
+  background:var(--bg);border:1px solid var(--border2);
+  border-radius:4px;padding:1px 6px;font-family:monospace;
+  font-size:10px;font-weight:700;color:var(--text2);
+  box-shadow:0 1px 2px rgba(0,0,0,.06);
+}
 
 /* ─────────────────────────────────────────────────────────
    FIELDS PANEL (left side of modal)
@@ -211,6 +221,24 @@ input[type="color"]{width:40px;height:34px;padding:2px;border:1.5px solid var(--
 
 /* Placed info summary */
 .placed-info{font-size:11px;color:var(--text3);line-height:1.5;padding:4px 4px 0;margin-top:auto}
+
+/* ─────────────────────────────────────────────────────────
+   SNAP GUIDES
+───────────────────────────────────────────────────────── */
+.snap-guide{
+  position:absolute;pointer-events:none;z-index:25;display:none;
+  transition:opacity .1s;
+}
+.snap-h{
+  left:0;right:0;height:1px;
+  background:rgba(26,86,219,.75);
+  box-shadow:0 0 0 1px rgba(26,86,219,.15), 0 0 8px rgba(26,86,219,.3);
+}
+.snap-v{
+  top:0;bottom:0;width:1px;
+  background:rgba(26,86,219,.75);
+  box-shadow:0 0 0 1px rgba(26,86,219,.15), 0 0 8px rgba(26,86,219,.3);
+}
 
 /* ─────────────────────────────────────────────────────────
    CANVAS HOST
@@ -342,6 +370,28 @@ input[type="color"]{width:40px;height:34px;padding:2px;border:1.5px solid var(--
 /* Delete button */
 .mtb-x{ color:#f87171; }
 .mtb-x:hover{ background:rgba(239,68,68,.25) !important; }
+
+/* X/Y coordinate inputs in toolbar */
+.mtb-coord-lbl{
+  font-size:9px;font-weight:700;color:#64748b;letter-spacing:.05em;
+}
+.mtb-coord-inp{
+  width:46px;height:26px;
+  background:rgba(255,255,255,.09);
+  border:1px solid rgba(255,255,255,.15);
+  border-radius:5px;
+  color:#e2e8f0;font-size:11px;font-weight:700;
+  text-align:center;font-family:monospace;
+  padding:0 4px;outline:none;
+  transition:border-color .15s, background .15s;
+  -moz-appearance:textfield;
+}
+.mtb-coord-inp::-webkit-outer-spin-button,
+.mtb-coord-inp::-webkit-inner-spin-button{ -webkit-appearance:none; }
+.mtb-coord-inp:focus{
+  border-color:rgba(99,179,237,.6);
+  background:rgba(255,255,255,.15);
+}
 
 /* ─────────────────────────────────────────────────────────
    PROGRESS
