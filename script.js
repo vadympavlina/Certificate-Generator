@@ -15,10 +15,11 @@ function nextN() { const n=getN()+1; localStorage.setItem('cn',n); return String
 
 // ── State ─────────────────────────────────────────────
 const ST = {
-  tplBytes:     null,   // Uint8Array — single template
-  bulkTplBytes: null,   // Uint8Array — bulk template
+  tplBytes:     null,
+  bulkTplBytes: null,
   excelRows:    [],
-  placements:   {},     // { field: {x,y} } in canvas coords
+  // placements[field] = { x, y, size, color, bold }
+  placements:   {},
   canvasW: 1, canvasH: 1,
   pdfW: 842, pdfH: 595,
   editorIsBulk: false,
@@ -26,8 +27,6 @@ const ST = {
 };
 
 // ── Font embedding ────────────────────────────────────
-// Waits up to 8s for fontkit to load from CDN/local file
-// Falls back to Helvetica + transliteration if unavailable (local file://)
 function waitForFontkit(ms = 8000) {
   if (typeof fontkit !== 'undefined') return Promise.resolve(fontkit);
   return new Promise((resolve) => {
@@ -39,18 +38,13 @@ function waitForFontkit(ms = 8000) {
   });
 }
 
-// Transliterates Ukrainian/Russian to Latin for Helvetica fallback
 function trl(s) {
   const m={'А':'A','Б':'B','В':'V','Г':'H','Ґ':'G','Д':'D','Е':'E','Є':'Ye','Ж':'Zh','З':'Z','И':'Y','І':'I','Ї':'Yi','Й':'Y','К':'K','Л':'L','М':'M','Н':'N','О':'O','П':'P','Р':'R','С':'S','Т':'T','У':'U','Ф':'F','Х':'Kh','Ц':'Ts','Ч':'Ch','Ш':'Sh','Щ':'Shch','Ю':'Yu','Я':'Ya','Ь':"'",'а':'a','б':'b','в':'v','г':'h','ґ':'g','д':'d','е':'e','є':'ie','ж':'zh','з':'z','и':'y','і':'i','ї':'yi','й':'i','к':'k','л':'l','м':'m','н':'n','о':'o','п':'p','р':'r','с':'s','т':'t','у':'u','ф':'f','х':'kh','ц':'ts','ч':'ch','ш':'sh','щ':'shch','ю':'yu','я':'ya','ь':"'"};
   return (s||'').split('').map(c=>m[c]??c).join('');
 }
 
-let _fontsCache = null; // { fontR, fontB, hasCyrillic }
-
 async function embedFonts(doc) {
   const { StandardFonts } = PDFLib;
-
-  // Try fontkit (enables Cyrillic)
   const fk = await waitForFontkit();
   if (fk) {
     try {
@@ -62,15 +56,25 @@ async function embedFonts(doc) {
       console.warn('Custom font embed failed:', e.message);
     }
   }
-
-  // Fallback: Helvetica (Latin only — text will be transliterated)
-  console.info('Using Helvetica fallback (no fontkit). Text will be transliterated.');
+  console.info('Using Helvetica fallback. Text will be transliterated.');
   return {
     fontR: await doc.embedFont(StandardFonts.Helvetica),
     fontB: await doc.embedFont(StandardFonts.HelveticaBold),
     cyrillic: false,
   };
 }
+
+function parseHexColor(hex) {
+  const { rgb } = PDFLib;
+  const h = (hex||'#111111').replace('#','');
+  return rgb(
+    parseInt(h.slice(0,2),16)/255,
+    parseInt(h.slice(2,4),16)/255,
+    parseInt(h.slice(4,6),16)/255
+  );
+}
+
+// ── Tabs ──────────────────────────────────────────────
 document.querySelectorAll('.tb').forEach(btn => {
   btn.addEventListener('click', () => {
     document.querySelectorAll('.tb').forEach(b => b.classList.remove('active'));
@@ -214,28 +218,22 @@ async function buildCert({ name, period, grade, num, date, tpl }) {
   const { width:W, height:H } = page.getSize();
 
   const { fontR, fontB, cyrillic } = await embedFonts(doc);
-  // If no Cyrillic support (fontkit unavailable), transliterate text to Latin
   const tx = cyrillic ? (s => s) : trl;
 
-  // Apply transliteration if needed
   const tName   = tx(name);
   const tPeriod = tx(period);
   const tGrade  = tx(grade);
   const tDate   = tx(date);
 
-  // Parse color
-  const hex = (ST.style.color||'#111111').replace('#','');
-  const clr = rgb(parseInt(hex.slice(0,2),16)/255, parseInt(hex.slice(2,4),16)/255, parseInt(hex.slice(4,6),16)/255);
-
+  // Global color fallback
+  const clr = parseHexColor(ST.style.color);
   const NS=ST.style.ns, GS=ST.style.gs, BS=ST.style.bs;
 
-  // Center text at (cx, baseline y)
   function ctext(txt, cx, y, font, size, color) {
     if (!txt) return;
     const w = font.widthOfTextAtSize(txt, size);
     page.drawText(txt, { x: cx-w/2, y, size, font, color });
   }
-  // Shrink font to fit maxW
   function fit(txt, font, pref, min, maxW) {
     let s=pref; while(s>min && font.widthOfTextAtSize(txt,s)>maxW) s-=0.5; return s;
   }
@@ -246,21 +244,23 @@ async function buildCert({ name, period, grade, num, date, tpl }) {
     const sy = H / ST.canvasH;
 
     const FIELDS = {
-      name:   { text: tName,         size: NS, bold: true  },
-      period: { text: tPeriod,       size: BS, bold: false },
-      grade:  { text: tGrade,        size: GS, bold: true  },
-      date:   { text: tDate,         size: BS-1, bold: false },
-      num:    { text: `№ ${num}`,    size: BS-2, bold: false },
+      name:   { text: tName,         defSize: NS,   defBold: true  },
+      period: { text: tPeriod,       defSize: BS,   defBold: false },
+      grade:  { text: tGrade,        defSize: GS,   defBold: true  },
+      date:   { text: tDate,         defSize: BS-1, defBold: false },
+      num:    { text: `№ ${num}`,    defSize: BS-2, defBold: false },
     };
 
     for (const [field, cfg] of Object.entries(FIELDS)) {
       const pl = ST.placements[field];
       if (!pl) continue;
-      const font = cfg.bold ? fontB : fontR;
-      const sz   = fit(cfg.text, font, cfg.size, 6, W * 0.8);
+      const bold = pl.bold ?? cfg.defBold;
+      const font = bold ? fontB : fontR;
+      const sz   = fit(cfg.text, font, pl.size ?? cfg.defSize, 6, W * 0.8);
+      const fieldClr = pl.color ? parseHexColor(pl.color) : clr;
       const pdfX = pl.x * sx;
       const pdfY = H - (pl.y * sy);
-      ctext(cfg.text, pdfX, pdfY - sz*0.3, font, sz, clr);
+      ctext(cfg.text, pdfX, pdfY - sz*0.3, font, sz, fieldClr);
     }
 
   } else {
@@ -274,7 +274,6 @@ async function buildCert({ name, period, grade, num, date, tpl }) {
 }
 
 function drawDefault({ page, W, H, fontR, fontB, rgb, ctext, fit, name, period, grade, date, num, NS, GS, BS, clr, cyrillic }) {
-  // Static labels — Ukrainian if Cyrillic font available, Latin otherwise
   const L = cyrillic ? {
     confirms:  'Цей сертифікат підтверджує, що',
     completed: 'успішно завершив(ла) курс навчання',
@@ -317,26 +316,21 @@ async function renderToBox(pdfBytes, boxId) {
   if (!box) return;
   const seq = ++_rseq;
   const ph  = box.querySelector('.prev-ph');
-
   try {
     const doc  = await pdfjsLib.getDocument({ data: pdfBytes.slice(0) }).promise;
     if (seq !== _rseq) return;
     const page = await doc.getPage(1);
     if (seq !== _rseq) return;
-
     const W   = Math.max((box.clientWidth||520) - 20, 250);
     const vp0 = page.getViewport({ scale:1 });
     const sc  = Math.min(W / vp0.width, 1.4);
     const vp  = page.getViewport({ scale: sc });
-
-    // Always new canvas — avoids "same canvas" error
     box.querySelectorAll('canvas').forEach(c=>c.remove());
     const cvs = document.createElement('canvas');
     cvs.width  = Math.floor(vp.width);
     cvs.height = Math.floor(vp.height);
     cvs.style.cssText = 'display:block;max-width:100%;height:auto;border-radius:3px;box-shadow:0 2px 12px rgba(0,0,0,.12)';
     box.appendChild(cvs);
-
     if (seq !== _rseq) { cvs.remove(); return; }
     await page.render({ canvasContext: cvs.getContext('2d'), viewport: vp }).promise;
     if (ph) ph.style.display = 'none';
@@ -363,25 +357,386 @@ function clearCanvas(boxId) {
   if (ph) ph.style.display='flex';
 }
 
-// ── Template editor modal ─────────────────────────────
+// ══════════════════════════════════════════════════════
+//  EDITOR — field placement modal
+// ══════════════════════════════════════════════════════
+
 const FIELD_META = {
-  name:   { label:'👤 ПІБ',    cls:'m-name'   },
-  period: { label:'📅 Період', cls:'m-period' },
-  grade:  { label:'🎓 Грейд',  cls:'m-grade'  },
-  date:   { label:'📆 Дата',   cls:'m-date'   },
-  num:    { label:'# Номер',   cls:'m-num'    },
+  name:   { label:'👤 ПІБ',    cls:'m-name',   defSize:28, defBold:true  },
+  period: { label:'📅 Період', cls:'m-period', defSize:11, defBold:false },
+  grade:  { label:'🎓 Грейд',  cls:'m-grade',  defSize:18, defBold:true  },
+  date:   { label:'📆 Дата',   cls:'m-date',   defSize:10, defBold:false },
+  num:    { label:'# Номер',   cls:'m-num',    defSize:9,  defBold:false },
 };
 
+// ── Editor local state ────────────────────────────────
+let _selectedField = null;
+let _armedField    = null;
+const _markerEls   = {};    // { field: HTMLElement }
+let _toolbarEl     = null;
+
+// ── Floating toolbar ──────────────────────────────────
+function getToolbar() {
+  if (_toolbarEl) return _toolbarEl;
+  const el = document.createElement('div');
+  el.className = 'mtb';
+  el.style.display = 'none';
+  el.innerHTML = `
+    <span class="mtb-lbl"></span>
+    <div class="mtb-sep"></div>
+    <button class="mtb-btn" data-a="sz-" title="Зменшити розмір">−</button>
+    <span class="mtb-sz">12</span>
+    <button class="mtb-btn" data-a="sz+" title="Збільшити розмір">+</button>
+    <div class="mtb-sep"></div>
+    <label class="mtb-cl" title="Колір тексту">
+      <input type="color" class="mtb-color" value="#111111"/>
+    </label>
+    <button class="mtb-btn mtb-b" data-a="bold" title="Жирний">B</button>
+    <div class="mtb-sep"></div>
+    <button class="mtb-btn mtb-x" data-a="del" title="Видалити поле">✕</button>
+  `;
+
+  // Prevent clicks inside toolbar from bubbling to canvas (deselect)
+  el.addEventListener('mousedown', e => e.stopPropagation());
+
+  el.addEventListener('click', e => {
+    const a = e.target.closest('[data-a]')?.dataset.a;
+    if (!a || !_selectedField) return;
+    const pl = ST.placements[_selectedField];
+    if (!pl) return;
+
+    if (a === 'sz-') pl.size = Math.max(6, pl.size - 1);
+    if (a === 'sz+') pl.size = Math.min(72, pl.size + 1);
+    if (a === 'bold') {
+      pl.bold = !pl.bold;
+      el.querySelector('.mtb-b').classList.toggle('on', pl.bold);
+    }
+    if (a === 'del') {
+      removeMarker(_selectedField);
+      return;
+    }
+    el.querySelector('.mtb-sz').textContent = pl.size;
+    refreshMarkerVisual(_selectedField);
+    positionToolbar(_selectedField);
+    syncFieldItem(_selectedField);
+  });
+
+  el.querySelector('.mtb-color').addEventListener('input', e => {
+    if (!_selectedField) return;
+    const pl = ST.placements[_selectedField];
+    if (!pl) return;
+    pl.color = e.target.value;
+    refreshMarkerVisual(_selectedField);
+    syncFieldItem(_selectedField);
+  });
+
+  _toolbarEl = el;
+  return el;
+}
+
+function showToolbar(field) {
+  const pl = ST.placements[field];
+  if (!pl) return;
+  _selectedField = field;
+
+  const tb   = getToolbar();
+  const host = $('canvas-host');
+  if (host && !host.contains(tb)) host.appendChild(tb);
+
+  tb.style.display = 'flex';
+  tb.querySelector('.mtb-lbl').textContent = FIELD_META[field].label;
+  tb.querySelector('.mtb-sz').textContent  = pl.size;
+  tb.querySelector('.mtb-color').value     = pl.color || '#111111';
+  tb.querySelector('.mtb-b').classList.toggle('on', !!pl.bold);
+
+  // Highlight the selected marker
+  Object.entries(_markerEls).forEach(([f, m]) =>
+    m.classList.toggle('selected', f === field)
+  );
+
+  positionToolbar(field);
+}
+
+function hideToolbar() {
+  _selectedField = null;
+  if (_toolbarEl) _toolbarEl.style.display = 'none';
+  Object.values(_markerEls).forEach(m => m.classList.remove('selected'));
+}
+
+function positionToolbar(field) {
+  const markerEl = _markerEls[field];
+  const tb       = _toolbarEl;
+  if (!markerEl || !tb) return;
+
+  const x = parseFloat(markerEl.style.left) || 0;
+  const y = parseFloat(markerEl.style.top)  || 0;
+  const mW = markerEl.offsetWidth  || 80;
+  const mH = markerEl.offsetHeight || 26;
+  const tbH = 42;
+
+  const above = y - mH / 2 - tbH - 12;
+
+  if (above > 4) {
+    tb.style.top = above + 'px';
+    tb.classList.remove('below');
+  } else {
+    tb.style.top = (y + mH / 2 + 12) + 'px';
+    tb.classList.add('below');
+  }
+  // Center toolbar over marker, clamp to canvas bounds
+  const host = $('canvas-host');
+  const maxLeft = host ? (host.offsetWidth - 20) : 9999;
+  const tbW = tb.offsetWidth || 260;
+  let left = x - mW / 2;
+  left = Math.max(4, Math.min(left, maxLeft - tbW));
+  tb.style.left = left + 'px';
+}
+
+// ── Marker elements ───────────────────────────────────
+function addMarker(f, x, y) {
+  // Remove existing DOM element (keep placement data)
+  _markerEls[f]?.remove();
+  delete _markerEls[f];
+
+  const meta = FIELD_META[f];
+
+  // Initialize placement if not already set
+  if (!ST.placements[f]) {
+    ST.placements[f] = {
+      x, y,
+      size:  meta.defSize,
+      bold:  meta.defBold,
+      color: '#111111',
+    };
+  } else {
+    // Update position only
+    ST.placements[f].x = x;
+    ST.placements[f].y = y;
+  }
+
+  const pl = ST.placements[f];
+
+  const el = document.createElement('div');
+  el.className  = `marker ${meta.cls}`;
+  el.dataset.f  = f;
+  el.style.left = x + 'px';
+  el.style.top  = y + 'px';
+  el.draggable  = true;
+  el.innerHTML  = `<span class="mk-lbl">${meta.label}</span><span class="mk-sz">${pl.size}px</span>`;
+
+  // Click → select & show toolbar
+  el.addEventListener('click', e => {
+    e.stopPropagation();
+    if (_selectedField === f) {
+      hideToolbar();
+    } else {
+      showToolbar(f);
+    }
+  });
+
+  // Drag to reposition
+  el.addEventListener('dragstart', e => {
+    hideToolbar();
+    const r = el.getBoundingClientRect();
+    e.dataTransfer.setData('f', f);
+    e.dataTransfer.setData('src', 'marker');
+    e.dataTransfer.setData('ox', String(e.clientX - r.left  - r.width  / 2));
+    e.dataTransfer.setData('oy', String(e.clientY - r.top   - r.height / 2));
+  });
+  el.addEventListener('dragend', () => {
+    // Small delay so drop fires first
+    setTimeout(() => showToolbar(f), 60);
+  });
+
+  const host = $('canvas-host');
+  host.appendChild(el);
+  _markerEls[f] = el;
+
+  refreshMarkerVisual(f);
+  syncFieldItem(f);
+  updatePlacedInfo();
+}
+
+function removeMarker(f) {
+  _markerEls[f]?.remove();
+  delete _markerEls[f];
+  delete ST.placements[f];
+  if (_selectedField === f) hideToolbar();
+  syncFieldItem(f);
+  updatePlacedInfo();
+}
+
+function refreshMarkerVisual(f) {
+  const el = _markerEls[f];
+  const pl = ST.placements[f];
+  if (!el || !pl) return;
+  el.querySelector('.mk-sz').textContent = pl.size + 'px';
+  el.style.fontWeight = pl.bold ? '900' : '700';
+  // Color ring if custom color
+  const isDefaultColor = !pl.color || pl.color === '#111111';
+  el.style.outline = isDefaultColor ? '' : `3px solid ${pl.color}`;
+  el.style.outlineOffset = isDefaultColor ? '' : '2px';
+}
+
+// ── Field items (left panel) ──────────────────────────
+function buildFieldItems() {
+  const list = $('field-list');
+  if (!list) return;
+  list.innerHTML = '';
+
+  Object.entries(FIELD_META).forEach(([f, meta]) => {
+    const item = document.createElement('div');
+    item.className = 'fi';
+    item.id = `fi-${f}`;
+    item.draggable = true;
+    item.dataset.f = f;
+
+    item.innerHTML = `
+      <div class="fi-top">
+        <span class="fi-lbl">${meta.label}</span>
+        <span class="fi-badge" id="fib-${f}">Не розміщено</span>
+      </div>
+      <div class="fi-settings" id="fis-${f}">
+        <div class="fi-sz-ctrl">
+          <button class="fi-sz-btn" data-f="${f}" data-a="sz-">−</button>
+          <span class="fi-sz-val" id="fisz-${f}">12</span>
+          <button class="fi-sz-btn" data-f="${f}" data-a="sz+">+</button>
+        </div>
+        <label title="Колір тексту" style="display:flex;align-items:center">
+          <input type="color" class="fi-color" id="fic-${f}" value="#111111"/>
+        </label>
+        <button class="fi-bold-btn" id="fib2-${f}" data-f="${f}" data-a="bold">B</button>
+        <button class="fi-del-btn" data-f="${f}" data-a="del" title="Видалити">✕</button>
+      </div>
+    `;
+
+    // Click on item → arm for click-to-place
+    item.addEventListener('click', e => {
+      // If settings controls clicked, don't arm
+      if (e.target.closest('.fi-settings')) return;
+      armField(f);
+    });
+
+    // Size/color/bold controls in left panel
+    item.addEventListener('click', e => {
+      const btn = e.target.closest('[data-a]');
+      if (!btn) return;
+      const field = btn.dataset.f;
+      const action = btn.dataset.a;
+      const pl = ST.placements[field];
+      if (!pl) return;
+      e.stopPropagation();
+
+      if (action === 'sz-') pl.size = Math.max(6, pl.size - 1);
+      if (action === 'sz+') pl.size = Math.min(72, pl.size + 1);
+      if (action === 'bold') pl.bold = !pl.bold;
+      if (action === 'del') { removeMarker(field); return; }
+
+      refreshMarkerVisual(field);
+      syncFieldItem(field);
+      // Update floating toolbar if this field is selected
+      if (_selectedField === field && _toolbarEl) {
+        _toolbarEl.querySelector('.mtb-sz').textContent = pl.size;
+        _toolbarEl.querySelector('.mtb-b').classList.toggle('on', !!pl.bold);
+      }
+    });
+
+    // Color in left panel
+    const colorInput = item.querySelector('.fi-color');
+    colorInput.addEventListener('input', e => {
+      e.stopPropagation();
+      const pl = ST.placements[f];
+      if (!pl) return;
+      pl.color = e.target.value;
+      refreshMarkerVisual(f);
+      if (_selectedField === f && _toolbarEl) {
+        _toolbarEl.querySelector('.mtb-color').value = e.target.value;
+      }
+    });
+
+    // Drag from left panel → DnD to canvas
+    item.addEventListener('dragstart', e => {
+      setArmedField(null);
+      e.dataTransfer.setData('f', f);
+      e.dataTransfer.setData('src', 'chip');
+    });
+
+    list.appendChild(item);
+  });
+}
+
+function syncFieldItem(f) {
+  const item  = $(`fi-${f}`);
+  const badge = $(`fib-${f}`);
+  const settings = $(`fis-${f}`);
+  const szEl  = $(`fisz-${f}`);
+  const fib2  = $(`fib2-${f}`);
+  const fic   = $(`fic-${f}`);
+  if (!item) return;
+
+  const pl = ST.placements[f];
+  if (pl) {
+    item.classList.add('placed');
+    badge.textContent = '✓ Розміщено';
+    if (szEl)  szEl.textContent = pl.size;
+    if (fib2)  fib2.classList.toggle('on', !!pl.bold);
+    if (fic)   fic.value = pl.color || '#111111';
+  } else {
+    item.classList.remove('placed');
+    badge.textContent = 'Не розміщено';
+  }
+}
+
+// ── Arm field (click-to-place mode) ──────────────────
+function armField(f) {
+  if (_armedField === f) {
+    setArmedField(null);
+  } else {
+    setArmedField(f);
+  }
+}
+
+function setArmedField(f) {
+  _armedField = f;
+  // Update field item armed states
+  document.querySelectorAll('.fi').forEach(el =>
+    el.classList.toggle('armed', el.dataset.f === f)
+  );
+  const host   = $('canvas-host');
+  const hint   = $('arm-hint');
+  const hintTx = $('arm-hint-text');
+
+  if (f) {
+    hint.style.display = 'flex';
+    hintTx.textContent = `Клікніть на шаблоні щоб розмістити ${FIELD_META[f].label}`;
+    if (host) host.classList.add('armed-mode');
+    hideToolbar();
+  } else {
+    hint.style.display = 'none';
+    if (host) host.classList.remove('armed-mode');
+  }
+}
+
+function updatePlacedInfo() {
+  const keys = Object.keys(ST.placements);
+  const el = $('placed-info');
+  if (!el) return;
+  el.textContent = keys.length
+    ? `✓ Розміщено: ${keys.map(f => FIELD_META[f].label).join(', ')}`
+    : 'Нічого не розміщено';
+}
+
+// ── Open modal ────────────────────────────────────────
 async function openEditor(bytes, isBulk) {
   ST.editorIsBulk = isBulk;
 
-  // Render PDF page to canvas via pdf.js
+  // Render PDF page to canvas
   const pdfjsDoc = await pdfjsLib.getDocument({ data: bytes.slice(0) }).promise;
   const pg       = await pdfjsDoc.getPage(1);
   const vp0      = pg.getViewport({ scale:1 });
   ST.pdfW = vp0.width; ST.pdfH = vp0.height;
 
-  const maxW  = Math.min(window.innerWidth * 0.62, 720);
+  const maxW  = Math.min(window.innerWidth * 0.60, 740);
   const scale = maxW / vp0.width;
   const vp    = pg.getViewport({ scale });
 
@@ -392,39 +747,38 @@ async function openEditor(bytes, isBulk) {
   ST.canvasH = cvs.height;
   await pg.render({ canvasContext: cvs.getContext('2d'), viewport: vp }).promise;
 
-  // Re-show existing markers (edit mode — keep placements)
-  document.querySelectorAll('.marker').forEach(m=>m.remove());
+  // Reset editor state
+  hideToolbar();
+  setArmedField(null);
+  Object.keys(_markerEls).forEach(f => { _markerEls[f]?.remove(); delete _markerEls[f]; });
+
+  // Build/rebuild field items
+  buildFieldItems();
+
+  // Re-add existing markers (edit mode — keep placements)
   Object.entries(ST.placements).forEach(([f, pos]) => addMarker(f, pos.x, pos.y));
-  syncChips();
-  updatePlacedInfo();
 
   $('modal').style.display = 'flex';
 
-  // Bind DnD (re-bind each time modal opens)
   bindDnD();
 }
 
+// ── Drag & Drop ───────────────────────────────────────
 function bindDnD() {
-  // Chips
-  document.querySelectorAll('.chip').forEach(chip => {
-    // Remove old listeners by cloning
-    const fresh = chip.cloneNode(true);
-    chip.parentNode.replaceChild(fresh, chip);
-    fresh.addEventListener('dragstart', e => {
-      e.dataTransfer.setData('f', fresh.dataset.f);
-      e.dataTransfer.setData('src', 'chip');
-    });
-  });
+  // Refresh chip dragstart listeners via item re-bind (buildFieldItems already did this)
 
-  // Canvas host drop zone
+  // Replace canvas host to clear old listeners
   const host = $('canvas-host');
-  const newHost = host.cloneNode(false); // clone without children
-  // Move children over
+  const newHost = host.cloneNode(false);
   while (host.firstChild) newHost.appendChild(host.firstChild);
   host.parentNode.replaceChild(newHost, host);
   newHost.id = 'canvas-host';
 
+  // Re-append toolbar if needed
+  if (_toolbarEl && !newHost.contains(_toolbarEl)) newHost.appendChild(_toolbarEl);
+
   newHost.addEventListener('dragover', e => e.preventDefault());
+
   newHost.addEventListener('drop', e => {
     e.preventDefault();
     const f   = e.dataTransfer.getData('f');
@@ -434,63 +788,57 @@ function bindDnD() {
     let x = e.clientX - r.left;
     let y = e.clientY - r.top;
     if (src === 'marker') {
-      x -= parseFloat(e.dataTransfer.getData('ox')||0);
-      y -= parseFloat(e.dataTransfer.getData('oy')||0);
+      x -= parseFloat(e.dataTransfer.getData('ox') || 0);
+      y -= parseFloat(e.dataTransfer.getData('oy') || 0);
     }
     addMarker(f, x, y);
+    // After drop, select the moved/placed field
+    setTimeout(() => showToolbar(f), 80);
+  });
+
+  // Click on canvas → place armed field, or deselect
+  newHost.addEventListener('mousedown', e => {
+    const clickedMarker = e.target.closest('.marker');
+    const clickedToolbar = e.target.closest('.mtb');
+    if (!clickedMarker && !clickedToolbar) {
+      if (_armedField) {
+        // Place the armed field
+        const r = newHost.getBoundingClientRect();
+        const x = e.clientX - r.left;
+        const y = e.clientY - r.top;
+        const armed = _armedField;
+        setArmedField(null);
+        addMarker(armed, x, y);
+        setTimeout(() => showToolbar(armed), 60);
+      } else {
+        hideToolbar();
+      }
+    }
   });
 }
 
-function addMarker(f, x, y) {
-  document.querySelectorAll(`.marker[data-f="${f}"]`).forEach(m=>m.remove());
-  const info = FIELD_META[f];
-  const el   = document.createElement('div');
-  el.className   = `marker ${info.cls}`;
-  el.dataset.f   = f;
-  el.textContent = info.label;
-  el.style.left  = x + 'px';
-  el.style.top   = y + 'px';
-  el.draggable   = true;
-  el.addEventListener('dragstart', e => {
-    const r = el.getBoundingClientRect();
-    e.dataTransfer.setData('f', f);
-    e.dataTransfer.setData('src', 'marker');
-    e.dataTransfer.setData('ox', String(e.clientX - r.left - r.width/2));
-    e.dataTransfer.setData('oy', String(e.clientY - r.top  - r.height/2));
-  });
-  const host = $('canvas-host');
-  host.appendChild(el);
-  ST.placements[f] = { x, y };
-  syncChips();
-  updatePlacedInfo();
-}
-
-function syncChips() {
-  document.querySelectorAll('.chip').forEach(c =>
-    c.classList.toggle('used', !!ST.placements[c.dataset.f])
-  );
-}
-
-function updatePlacedInfo() {
-  const keys = Object.keys(ST.placements);
-  $('placed-info').textContent = keys.length
-    ? `✓ ${keys.map(f=>FIELD_META[f].label).join('  ')}`
-    : 'Нічого не розміщено';
-}
-
-$('modal-x').addEventListener('click', () => $('modal').style.display='none');
-$('modal-reset').addEventListener('click', () => {
-  ST.placements = {};
-  document.querySelectorAll('.marker').forEach(m=>m.remove());
-  syncChips(); updatePlacedInfo();
-});
-$('modal-ok').addEventListener('click', async () => {
+// ── Modal buttons ─────────────────────────────────────
+$('modal-x').addEventListener('click', () => {
   $('modal').style.display = 'none';
+  setArmedField(null);
+});
+
+$('modal-reset').addEventListener('click', () => {
+  Object.keys(ST.placements).forEach(f => removeMarker(f));
+  hideToolbar();
+  updatePlacedInfo();
+});
+
+$('modal-ok').addEventListener('click', () => {
+  $('modal').style.display = 'none';
+  setArmedField(null);
   const n = Object.keys(ST.placements).length;
   if (!n) { toast('⚠️ Жодного поля не розміщено', 'err'); return; }
-  toast(`✅ ${n} полів збережено`, 'ok');
+  toast(`✅ ${n} ${n === 1 ? 'поле збережено' : 'полів збережено'}`, 'ok');
   if (!ST.editorIsBulk) renderPreview();
 });
+
+$('arm-cancel').addEventListener('click', () => setArmedField(null));
 
 // ── Excel parser ──────────────────────────────────────
 function parseExcel(buf) {
