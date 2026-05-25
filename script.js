@@ -13,6 +13,7 @@ function nextN() { const n=getN()+1; localStorage.setItem('cn',n); return String
 // ── State ─────────────────────────────────────────────
 const ST = {
   tplBytes:null, bulkTplBytes:null, tplName:'', excelRows:[],
+  lastPdfBytes:null, lastPdfLabel:'Превью сертифіката',
   placements:{},          // { field: {x,y,size,color,bold,align} }
   canvasW:1, canvasH:1,
   pdfW:842, pdfH:595,
@@ -233,6 +234,8 @@ async function renderPreview(){
         grade=($('f-grade').value.trim()||'B2');
   try{
     const bytes=await buildCert({name,period,grade,num:'####',date:fmtDate(new Date()),tpl:ST.tplBytes});
+    ST.lastPdfBytes=bytes;
+    ST.lastPdfLabel=($('f-name').value.trim()||'Олена Петренко')+' — Single';
     await renderToBox(bytes,'prev-box');
   }catch(e){console.warn('preview:',e);}
 }
@@ -758,6 +761,7 @@ $('modal-ok').addEventListener('click',()=>{
   const n=Object.keys(ST.placements).length;
   if(!n){toast('⚠️ Жодного поля не розміщено','err');return;}
   toast(`✅ ${n} ${n===1?'поле збережено':'полів збережено'}`,'ok');
+  checkSyncVisibility();
   if(!ST.editorIsBulk)renderPreview();
 });
 $('arm-cancel').addEventListener('click',()=>setArmedField(null));
@@ -782,6 +786,8 @@ async function autoPreviewBulk(){
   const{name,period,grade}=ST.excelRows[0];
   try{
     const bytes=await buildCert({name,period,grade,num:'001',date:fmtDate(new Date()),tpl:ST.bulkTplBytes});
+    ST.lastPdfBytes=bytes;
+    ST.lastPdfLabel=name+' — Bulk (зразок)';
     await renderToBox(bytes,'bulk-prev-box');
   }catch(e){console.warn('bulk preview:',e);}
 }
@@ -909,6 +915,195 @@ $('btn-import-preset').addEventListener('click', () => {
 $('in-preset').addEventListener('change', e => {
   const file = e.target.files[0];
   if (file) { importPreset(file); e.target.value = ''; }
+});
+
+
+// ══════════════════════════════════════════════════════
+//   LIGHTBOX
+// ══════════════════════════════════════════════════════
+
+const LB = { zoom: 1.0, steps: [0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 3.0] };
+
+async function openLightbox(pdfBytes, label) {
+  if (!pdfBytes) { toast('⚠️ Немає превью для відображення', 'err'); return; }
+
+  const lb = $('lightbox');
+  lb.style.display = 'flex';
+  $('lb-title').textContent = label || 'Превью сертифіката';
+  $('lb-spinner').style.display = 'flex';
+  $('lb-canvas').style.display = 'none';
+
+  try {
+    const doc  = await pdfjsLib.getDocument({ data: pdfBytes.slice(0) }).promise;
+    const page = await doc.getPage(1);
+    const vp0  = page.getViewport({ scale: 1 });
+
+    // Render at 2× for sharpness
+    const baseScale = Math.min(
+      (window.innerWidth  - 80) / vp0.width,
+      (window.innerHeight - 120) / vp0.height,
+      2.0
+    );
+    LB.baseScale = baseScale;
+    LB.zoom = 1.0;
+    updateLbZoomUI();
+
+    await lbRender(page, vp0, baseScale * LB.zoom);
+    LB.page = page;
+    LB.vp0  = vp0;
+  } catch(e) {
+    console.error('lightbox:', e);
+    toast('❌ Не вдалося відрендерити', 'err');
+    closeLightbox();
+  } finally {
+    $('lb-spinner').style.display = 'none';
+    $('lb-canvas').style.display = 'block';
+  }
+}
+
+async function lbRender(page, vp0, scale) {
+  const vp  = (page || LB.page).getViewport({ scale });
+  const cvs = $('lb-canvas');
+  cvs.width  = Math.floor(vp.width);
+  cvs.height = Math.floor(vp.height);
+  const ctx  = cvs.getContext('2d');
+  ctx.clearRect(0, 0, cvs.width, cvs.height);
+  await (page || LB.page).render({ canvasContext: ctx, viewport: vp }).promise;
+}
+
+function updateLbZoomUI() {
+  $('lb-zoom-val').textContent = Math.round(LB.zoom * 100) + '%';
+  $('lb-zoom-out').disabled = LB.zoom <= LB.steps[0];
+  $('lb-zoom-in').disabled  = LB.zoom >= LB.steps[LB.steps.length - 1];
+}
+
+async function lbSetZoom(z) {
+  LB.zoom = z;
+  updateLbZoomUI();
+  if (LB.page && LB.vp0 && LB.baseScale) {
+    $('lb-spinner').style.display = 'flex';
+    await lbRender(LB.page, LB.vp0, LB.baseScale * LB.zoom);
+    $('lb-spinner').style.display = 'none';
+  }
+}
+
+function lbZoomIn()  { const i = LB.steps.indexOf(LB.zoom); if (i < LB.steps.length-1) lbSetZoom(LB.steps[i+1]); }
+function lbZoomOut() { const i = LB.steps.indexOf(LB.zoom); if (i > 0) lbSetZoom(LB.steps[i-1]); }
+function lbZoomFit() { lbSetZoom(1.0); }
+
+function closeLightbox() {
+  $('lightbox').style.display = 'none';
+  LB.page = null;
+}
+
+// Lightbox click handlers
+$('lb-close').addEventListener('click', closeLightbox);
+$('lb-zoom-in').addEventListener('click', lbZoomIn);
+$('lb-zoom-out').addEventListener('click', lbZoomOut);
+$('lb-zoom-fit').addEventListener('click', lbZoomFit);
+
+// Click outside canvas (on dark background) → close
+$('lb-body').addEventListener('click', e => {
+  if (e.target === $('lb-body') || e.target === $('lb-wrap')) closeLightbox();
+});
+
+// Keyboard in lightbox
+document.addEventListener('keydown', e => {
+  if ($('lightbox').style.display === 'none') return;
+  if (e.key === 'Escape') { closeLightbox(); return; }
+  if (e.key === '+' || e.key === '=') { e.preventDefault(); lbZoomIn(); }
+  if (e.key === '-')                  { e.preventDefault(); lbZoomOut(); }
+  if (e.key === '0')                  { e.preventDefault(); lbZoomFit(); }
+});
+
+// Scroll to zoom inside lightbox
+$('lb-body').addEventListener('wheel', e => {
+  if ($('lightbox').style.display === 'none') return;
+  e.preventDefault();
+  e.deltaY < 0 ? lbZoomIn() : lbZoomOut();
+}, { passive: false });
+
+// Click on preview boxes → open lightbox
+$('prev-box').addEventListener('click', e => {
+  if (e.target.tagName === 'CANVAS' || e.target === $('prev-box')) {
+    if (ST.lastPdfBytes) openLightbox(ST.lastPdfBytes, ST.lastPdfLabel);
+  }
+});
+$('bulk-prev-box').addEventListener('click', e => {
+  if (e.target.tagName === 'CANVAS' || e.target === $('bulk-prev-box')) {
+    if (ST.lastPdfBytes) openLightbox(ST.lastPdfBytes, ST.lastPdfLabel);
+  }
+});
+
+
+// ══════════════════════════════════════════════════════
+//   SYNC PLACEMENTS SINGLE ↔ BULK
+// ══════════════════════════════════════════════════════
+
+function deepClonePlacements(pl) {
+  const out = {};
+  for (const [f, v] of Object.entries(pl)) {
+    out[f] = { ...v };
+  }
+  return out;
+}
+
+function checkSyncVisibility() {
+  // Show sync-single-row if single has template + placements
+  const sRow = $('sync-single-row');
+  const bRow = $('sync-bulk-row');
+  if (sRow) sRow.style.display = (ST.tplBytes && Object.keys(ST.placements).length) ? 'flex' : 'none';
+  if (bRow) bRow.style.display = (ST.bulkTplBytes && Object.keys(ST.placements).length && ST.editorIsBulk === false
+    || ST.bulkTplBytes) ? 'flex' : 'none';
+}
+
+$('btn-sync-to-bulk').addEventListener('click', () => {
+  if (!Object.keys(ST.placements).length) {
+    toast('⚠️ Немає розміщених полів для синхронізації', 'err'); return;
+  }
+  if (!ST.bulkTplBytes) {
+    // Copy template bytes too
+    ST.bulkTplBytes = ST.tplBytes;
+    // Update UI
+    const chB = $('ch-bulk-tpl');
+    const nmB = $('ch-bulk-tpl-name');
+    const dzB = $('dz-bulk-tpl');
+    if (chB && nmB && dzB && ST.tplName) {
+      nmB.textContent = ST.tplName + ' (скопійовано)';
+      chB.style.display = 'flex';
+      dzB.style.display = 'none';
+    }
+  }
+  // Deep clone placements
+  const cloned = deepClonePlacements(ST.placements);
+  const count  = Object.keys(cloned).length;
+  // Store as bulk placements (shared ST.placements — they share same object)
+  // Already same, just confirm
+  toast(`✅ ${count} полів скопійовано в Bulk`, 'ok');
+  checkSyncVisibility();
+  // Auto preview bulk with first student if available
+  if (ST.excelRows.length) autoPreviewBulk();
+});
+
+$('btn-sync-to-single').addEventListener('click', () => {
+  if (!Object.keys(ST.placements).length) {
+    toast('⚠️ Немає розміщених полів для синхронізації', 'err'); return;
+  }
+  if (!ST.tplBytes && ST.bulkTplBytes) {
+    ST.tplBytes = ST.bulkTplBytes;
+    const chS = $('ch-tpl');
+    const nmS = $('ch-tpl-name');
+    const dzS = $('dz-tpl');
+    if (chS && nmS && dzS && ST.tplName) {
+      nmS.textContent = ST.tplName + ' (скопійовано)';
+      chS.style.display = 'flex';
+      dzS.style.display = 'none';
+    }
+  }
+  const count = Object.keys(ST.placements).length;
+  toast(`✅ ${count} полів скопійовано в Single`, 'ok');
+  checkSyncVisibility();
+  renderPreview();
 });
 
 // ── Excel parser ──────────────────────────────────────
