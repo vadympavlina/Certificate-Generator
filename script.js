@@ -793,7 +793,10 @@ async function autoPreviewBulk(){
 
 function exportPreset() {
   const keys = Object.keys(ST.placements);
-  if (!keys.length) { toast('⚠️ Немає розміщених полів для збереження', 'err'); return; }
+  if (!keys.length) {
+    toast('⚠️ Спочатку розмістіть хоча б одне поле на шаблоні', 'err');
+    return;
+  }
 
   // Build preset with normalized 0-1 coordinates
   // (independent of canvas size / zoom / screen resolution)
@@ -899,7 +902,10 @@ function importPreset(file) {
 
 // ── Preset event listeners ────────────────────────────
 $('btn-export-preset').addEventListener('click', exportPreset);
-$('btn-import-preset').addEventListener('click', () => $('in-preset').click());
+$('btn-import-preset').addEventListener('click', () => {
+  const inp = $('in-preset');
+  if (inp) { inp.value = ''; inp.click(); }
+});
 $('in-preset').addEventListener('change', e => {
   const file = e.target.files[0];
   if (file) { importPreset(file); e.target.value = ''; }
