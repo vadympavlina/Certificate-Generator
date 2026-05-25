@@ -27,11 +27,10 @@
     <button class="tb" data-tab="bulk">Пакетна генерація (Excel)</button>
   </div>
 
-  <!-- ===== SINGLE ===== -->
+  <!-- SINGLE -->
   <div class="tp active" id="panel-single">
     <div class="grid">
       <div class="col-left">
-
         <div class="card">
           <h2><span class="b">1</span>Дані сертифіката</h2>
           <div class="f"><label>Прізвище та ім'я *</label><input id="f-name" type="text" placeholder="Олена Петренко" maxlength="60"/></div>
@@ -39,13 +38,11 @@
             <div class="f"><label>Період навчання *</label><input id="f-period" type="text" placeholder="Вер–Гру 2024"/></div>
             <div class="f"><label>Грейд / рівень *</label><input id="f-grade" type="text" placeholder="B2, Junior…"/></div>
           </div>
-
           <div class="f">
             <label>Шаблон PDF <span class="opt">— необов'язково</span></label>
             <div class="dz" id="dz-tpl">
               <svg width="28" height="28" viewBox="0 0 28 28" fill="none"><path d="M14 4v16M8 10l6-6 6 6" stroke="#1a56db" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M3 22h22" stroke="#1a56db" stroke-width="2" stroke-linecap="round"/></svg>
-              <p>Завантажте PDF як шаблон</p>
-              <p><u>Оберіть файл</u> або перетягніть</p>
+              <p>Завантажте PDF як шаблон</p><p><u>Оберіть файл</u> або перетягніть</p>
               <small>Без шаблону — стандартний дизайн</small>
               <input type="file" id="in-tpl" accept=".pdf" hidden/>
             </div>
@@ -56,10 +53,8 @@
               <button class="rm-btn" id="rm-tpl">✕</button>
             </div>
           </div>
-
           <button class="btn" id="btn-gen">⬇ Завантажити PDF</button>
         </div>
-
         <div class="card">
           <h2><span class="b">2</span>Стиль тексту</h2>
           <div class="style-grid">
@@ -69,9 +64,7 @@
             <div class="f"><label>Колір тексту</label><div class="cr"><input type="color" id="s-col" value="#111111"/><span id="s-col-v">#111111</span></div></div>
           </div>
         </div>
-
       </div>
-
       <div class="card preview-card">
         <h2><span class="b">3</span>Превью</h2>
         <div class="prev-box" id="prev-box">
@@ -81,20 +74,16 @@
           </div>
         </div>
       </div>
-
     </div>
   </div>
 
-  <!-- ===== BULK ===== -->
+  <!-- BULK -->
   <div class="tp" id="panel-bulk">
     <div class="grid">
       <div class="col-left">
         <div class="card">
           <h2><span class="b">1</span>Пакетна генерація</h2>
-          <div class="ibox">
-            <b>Формат Excel:</b> колонки <code>name</code>, <code>period</code>, <code>grade</code>
-            (або ПІБ, Період, Грейд)
-          </div>
+          <div class="ibox"><b>Формат Excel:</b> колонки <code>name</code>, <code>period</code>, <code>grade</code></div>
           <div class="f">
             <label>Excel файл (.xlsx) *</label>
             <div class="dz" id="dz-excel">
@@ -104,8 +93,7 @@
             </div>
             <div class="chosen" id="ch-excel" style="display:none">
               <svg width="14" height="14" viewBox="0 0 14 14"><path d="M2 7l4 4 6-6" stroke="#16a34a" stroke-width="2" stroke-linecap="round" fill="none"/></svg>
-              <span id="ch-excel-name"></span>
-              <button class="rm-btn" id="rm-excel">✕</button>
+              <span id="ch-excel-name"></span><button class="rm-btn" id="rm-excel">✕</button>
             </div>
           </div>
           <div class="f">
@@ -129,7 +117,6 @@
           <button class="btn" id="btn-bulk" disabled>⬇ Завантажити ZIP архів</button>
         </div>
       </div>
-
       <div class="card preview-card">
         <h2><span class="b">2</span>Зразок</h2>
         <div class="prev-box" id="bulk-prev-box">
@@ -143,13 +130,13 @@
   </div>
 </main>
 
-<!-- ===== EDITOR MODAL ===== -->
+<!-- EDITOR MODAL -->
 <div class="modal-overlay" id="modal" style="display:none">
   <div class="modal-box">
     <div class="modal-head">
       <div>
         <h3>Розмістіть поля на шаблоні</h3>
-        <p>Клікніть поле зліва → клікніть на шаблоні. Або перетягніть поле прямо на шаблон. Клік на розміщений маркер — редагування.</p>
+        <p>Клікніть поле зліва → клікніть на шаблоні. Або перетягніть поле. Клік на маркер — редагування.</p>
       </div>
       <button class="modal-x" id="modal-x">✕</button>
     </div>
@@ -167,11 +154,19 @@
         <div class="placed-info" id="placed-info">Нічого не розміщено</div>
       </div>
 
-      <!-- Right: canvas -->
+      <!-- Right: canvas with zoom -->
       <div class="canvas-col">
-        <div class="canvas-scroll">
-          <div class="canvas-host" id="canvas-host">
-            <canvas id="editor-canvas"></canvas>
+        <div class="zoom-bar">
+          <button class="zoom-btn" id="zoom-out" title="Зменшити (Ctrl −)">−</button>
+          <button class="zoom-btn zoom-fit-btn" id="zoom-fit" title="По ширині (Ctrl 0)">⊡</button>
+          <span class="zoom-val" id="zoom-val">100%</span>
+          <button class="zoom-btn" id="zoom-in" title="Збільшити (Ctrl +)">+</button>
+        </div>
+        <div class="canvas-scroll" id="canvas-scroll">
+          <div class="zoom-wrapper" id="zoom-wrapper">
+            <div class="canvas-host" id="canvas-host">
+              <canvas id="editor-canvas"></canvas>
+            </div>
           </div>
         </div>
       </div>
@@ -180,9 +175,11 @@
     <div class="modal-foot">
       <button class="btn-ghost" id="modal-reset">Скинути все</button>
       <div class="kbd-hint">
-        <span>⬅ ➡ ⬆ ⬇</span> рухати маркер &nbsp;·&nbsp;
-        <span>Shift + ⬅ ➡ ⬆ ⬇</span> крок 10px &nbsp;·&nbsp;
-        <span>Клік на маркер</span> редагувати
+        <span>← → ↑ ↓</span> рухати &nbsp;·&nbsp;
+        <span>Shift+стрілка</span> ×10px &nbsp;·&nbsp;
+        <span>Del</span> видалити &nbsp;·&nbsp;
+        <span>Esc</span> скасувати &nbsp;·&nbsp;
+        <span>Ctrl ±</span> zoom
       </div>
       <button class="btn" id="modal-ok" style="width:auto;padding:11px 28px">✓ Підтвердити</button>
     </div>
@@ -202,16 +199,9 @@
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js"></script>
 <script>
-(function(){
-  var s = document.createElement('script');
-  s.src = 'fontkit.js';
-  s.onerror = function(){
-    var c = document.createElement('script');
-    c.src = 'https://cdn.jsdelivr.net/npm/@pdf-lib/fontkit@1.1.1/build/fontkit.umd.js';
-    document.head.appendChild(c);
-  };
-  document.head.appendChild(s);
-})();
+(function(){var s=document.createElement('script');s.src='fontkit.js';
+  s.onerror=function(){var c=document.createElement('script');c.src='https://cdn.jsdelivr.net/npm/@pdf-lib/fontkit@1.1.1/build/fontkit.umd.js';document.head.appendChild(c);};
+  document.head.appendChild(s);})();
 </script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
