@@ -132,7 +132,7 @@
     }
     return {
       version: 2,
-      app: 'ITSTEP Certificate Generator',
+      app: 'Certificate Generator',
       created: new Date().toISOString(),
       template: template || 'unknown',
       pdfSize: { w: Math.round(pdfW), h: Math.round(pdfH) },
@@ -264,8 +264,8 @@
       doc = await PDFDocument.create();
       doc.addPage(DEFAULT_PAGE);
     }
-    doc.setCreator('ITSTEP Certificate Generator');
-    doc.setProducer('ITSTEP Certificate Generator');
+    doc.setCreator('Certificate Generator');
+    doc.setProducer('Certificate Generator');
     if (data.name) doc.setTitle(`Сертифікат — ${data.name}`);
 
     const useCustom = !!(fontkit && fontBytes && fontBytes.regular && fontBytes.bold);
@@ -350,8 +350,8 @@
     page.drawRectangle({ x: 14, y: 14, width: W - 28, height: H - 28, borderColor: gold, borderWidth: 2 });
     page.drawRectangle({ x: 22, y: 22, width: W - 44, height: H - 44, borderColor: rgb(.86, .76, .56), borderWidth: .5 });
     page.drawRectangle({ x: 14, y: H - 74, width: W - 28, height: 60, color: rgb(.08, .11, .22) });
-    await text('IT STEP Academy', W / 2, H - 54, true, 11, rgb(.86, .72, .40));
-    await text('CERTIFICATE OF COMPLETION', W / 2, H - 68, false, 7.5, rgb(.55, .55, .62));
+    await text('СЕРТИФІКАТ', W / 2, H - 52, true, 13, rgb(.86, .72, .40));
+    await text('про завершення навчання', W / 2, H - 66, false, 8, rgb(.62, .62, .70));
     await text('Цей сертифікат підтверджує, що', W / 2, H - 108, false, 11, rgb(.5, .5, .5));
     page.drawLine({ start: { x: W * .15, y: H - 127 }, end: { x: W * .85, y: H - 127 }, thickness: .5, color: gold });
     await text(texts.name, W / 2, H - 172, true, 28, rgb(...hexToRgb01(DEFAULT_COLOR)), W * .68);
