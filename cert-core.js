@@ -11,11 +11,11 @@
 
   // ── Fields ──────────────────────────────────────────
   const FIELDS = {
-    name:   { label: '👤 ПІБ',    defSize: 28, defBold: true  },
-    period: { label: '📅 Період', defSize: 11, defBold: false },
-    grade:  { label: '🎓 Грейд',  defSize: 18, defBold: true  },
-    date:   { label: '📆 Дата',   defSize: 10, defBold: false },
-    num:    { label: '# Номер',   defSize: 9,  defBold: false },
+    name:   { label: 'ПІБ',    defSize: 28, defBold: true  },
+    period: { label: 'Період', defSize: 11, defBold: false },
+    grade:  { label: 'Грейд',  defSize: 18, defBold: true  },
+    date:   { label: 'Дата',   defSize: 10, defBold: false },
+    num:    { label: 'Номер',  defSize: 9,  defBold: false },
   };
   const FIELD_KEYS = Object.keys(FIELDS);
   const ALIGNS = ['left', 'center', 'right'];
@@ -242,7 +242,7 @@
    * @param {object} [o.fontkit] @pdf-lib/fontkit; without it Helvetica + transliteration is used
    * @param {{regular:Uint8Array,bold:Uint8Array}} [o.fontBytes]
    * @param {Uint8Array} [o.template] PDF template; without it the built-in design is used
-   * @param {object} [o.placements] field → placement (normalised)
+   * @param {object} [o.placements] field -> placement (normalised)
    * @param {{name,period,grade,date,num}} o.data
    * @param {boolean} [o.requirePlacements=true] throw if a template has no placed fields
    * @returns {Promise<Uint8Array>}
@@ -254,7 +254,7 @@
     const hasPlacements = FIELD_KEYS.some(f => placements[f]);
 
     if (template && !hasPlacements && o.requirePlacements !== false) {
-      throw new CertError('NO_PLACEMENTS', 'Розмістіть поля на шаблоні (кнопка «✏️ Розмістити поля»)');
+      throw new CertError('NO_PLACEMENTS', 'Розмістіть поля на шаблоні (кнопка «Розмістити поля»)');
     }
 
     let doc;

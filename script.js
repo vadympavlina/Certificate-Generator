@@ -25,6 +25,10 @@ const plural = (n, one, few, many) => {
   return many;
 };
 const students = n => `${n} ${plural(n, 'студент', 'студенти', 'студентів')}`;
+const certs = n => `${n} ${plural(n, 'сертифікат', 'сертифікати', 'сертифікатів')}`;
+const fmtSize = b => b < 1024 * 1024 ? `${Math.max(1, Math.round(b / 1024))} КБ` : `${(b / 1048576).toFixed(1).replace('.', ',')} МБ`;
+const FIELD_ICONS = { name: 'user', period: 'clock', grade: 'star', date: 'calendar', num: 'hash' };
+const icon = (name, cls = '') => `<svg class="ic ${cls}" aria-hidden="true"><use href="#i-${name}"/></svg>`;
 const fields = n => `${n} ${plural(n, 'поле', 'поля', 'полів')}`;
 
 const store = {
@@ -44,7 +48,7 @@ function loadScript(src) {
 }
 
 function openPdf(bytes) {
-  // pdf.js transfers the buffer to its worker → always pass a copy.
+  // pdf.js transfers the buffer to its worker, so always pass a copy.
   // isEvalSupported:false mitigates CVE-2024-4367 for untrusted templates.
   return pdfjsLib.getDocument({
     data: bytes.slice(0),
@@ -97,7 +101,7 @@ function loadFonts() {
       return { fontkit: fk, fontBytes: { regular, bold } };
     } catch (e) {
       console.warn('Cyrillic font unavailable:', e);
-      toast('⚠️ Не вдалося завантажити шрифт — кирилиця буде транслітерована', 'err', 6000);
+      toast('Не вдалося завантажити шрифт — кирилиця буде транслітерована', 'warn', 6000);
       return { fontkit: null, fontBytes: null };
     }
   })();
@@ -118,7 +122,7 @@ async function build({ mode, data, requirePlacements = true }) {
 }
 
 // ── Tabs ──────────────────────────────────────────────
-const tabs = [...document.querySelectorAll('.tb')];
+const tabs = [...document.querySelectorAll('.seg-btn')];
 function selectTab(name, focus = false) {
   tabs.forEach(b => {
     const on = b.dataset.tab === name;
@@ -144,68 +148,89 @@ tabs.forEach((b, i) => {
 const initialTab = store.get('tab', 'single') === 'bulk' ? 'bulk' : 'single';
 
 // ── Upload helper ─────────────────────────────────────
-function mkUpload({ dzId, inId, chId, nmId, rmId, exts, limit, onLoad, onClear }) {
-  const dz = $(dzId), inp = $(inId), ch = $(chId), nm = $(nmId), rm = $(rmId);
+// Dropping a file anywhere else must not make the browser navigate away.
+['dragover', 'drop'].forEach(t => window.addEventListener(t, e => {
+  if (Array.from(e.dataTransfer?.types || []).includes('Files') && !e.target.closest?.('.dz,.filechip')) {
+    e.preventDefault();
+    if (t === 'dragover') e.dataTransfer.dropEffect = 'none';
+  }
+}));
+
+function mkUpload({ dzId, inId, chId, nmId, metaId, rmId, exts, limit, onLoad, onClear }) {
+  const dz = $(dzId), inp = $(inId), ch = $(chId), nm = $(nmId), meta = $(metaId), rm = $(rmId);
   const show = chosen => { ch.hidden = !chosen; dz.hidden = chosen; };
+  const setName = (n, m = '') => { nm.textContent = n; nm.title = n; meta.textContent = m; };
   dz.addEventListener('click', () => inp.click());
   dz.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); inp.click(); } });
-  dz.addEventListener('dragover', e => { e.preventDefault(); dz.classList.add('over'); });
-  dz.addEventListener('dragleave', () => dz.classList.remove('over'));
-  dz.addEventListener('drop', e => { e.preventDefault(); dz.classList.remove('over'); handle(e.dataTransfer.files[0]); });
+  // the chosen-file chip also accepts a drop to replace the file
+  for (const el of [dz, ch]) {
+    el.addEventListener('dragover', e => { e.preventDefault(); el.classList.add('over'); });
+    el.addEventListener('dragleave', e => { if (!el.contains(e.relatedTarget)) el.classList.remove('over'); });
+    el.addEventListener('drop', e => { e.preventDefault(); el.classList.remove('over'); handle(e.dataTransfer.files[0]); });
+  }
   inp.addEventListener('change', () => { handle(inp.files[0]); inp.value = ''; });
   rm.addEventListener('click', () => { show(false); onClear(); dz.focus(); });
 
   async function handle(file) {
     if (!file) return;
     const ext = (file.name.match(/\.[^.]+$/) || [''])[0].toLowerCase();
-    if (!exts.includes(ext)) { toast(`❌ Непідтримуваний формат: очікується ${exts.join(', ')}`, 'err'); return; }
-    if (file.size > limit) { toast(`❌ Файл завеликий (макс. ${Math.round(limit / 1048576)} МБ)`, 'err'); return; }
+    if (!exts.includes(ext)) { toast(`Непідтримуваний формат. Очікується: ${exts.join(', ')}`, 'err'); return; }
+    if (file.size > limit) { toast(`Файл завеликий — максимум ${Math.round(limit / 1048576)} МБ`, 'err'); return; }
     try {
       const bytes = new Uint8Array(await file.arrayBuffer());
-      await onLoad(bytes, file.name);
-      nm.textContent = file.name; nm.title = file.name;
+      const info = await onLoad(bytes, file.name);
+      setName(file.name, [info, fmtSize(file.size)].filter(Boolean).join(' · '));
       show(true);
     } catch (e) {
-      console.error(e);
-      toast('❌ ' + (e.message || 'Не вдалося відкрити файл'), 'err', 6000);
+      console.warn(e);
+      toast(e.message || 'Не вдалося відкрити файл', 'err', 6000);
     }
   }
-  return { show, setName: n => { nm.textContent = n; nm.title = n; } };
+  return { show, setName };
 }
 
+/** Validates a PDF template early (readable errors) and returns a short description. */
 async function checkTemplate(bytes) {
   const head = new TextDecoder('latin1').decode(bytes.subarray(0, 1024));
   if (!head.includes('%PDF-')) throw new Error('Це не PDF-файл');
-  // Fail early with a readable message (encrypted, damaged, no pages…)
-  await C.buildCert({ PDFLib, template: bytes, placements: {}, data: {}, requirePlacements: false });
+  let doc;
+  try { doc = await PDFLib.PDFDocument.load(bytes); }
+  catch (e) {
+    throw new Error(/encrypt/i.test(e?.message) ? 'PDF-шаблон захищено паролем — збережіть його без захисту' : 'Не вдалося прочитати PDF-шаблон');
+  }
+  if (!doc.getPageCount()) throw new Error('PDF-шаблон не містить сторінок');
+  const { viewW, viewH } = C.pageFrame(doc.getPage(0));
+  return { viewW, viewH, pages: doc.getPageCount() };
 }
+const pageInfo = (w, h) => `${Math.round(w)}×${Math.round(h)} pt`;
 
 async function setTemplate(mode, bytes, name) {
-  await checkTemplate(bytes);
+  const info = await checkTemplate(bytes);
   const s = ST[mode];
+  // replacing a template keeps the layout (coordinates are normalised)
   const keep = s.tpl && Object.keys(s.placements).length;
-  s.tpl = bytes; s.tplName = name;
+  Object.assign(s, { tpl: bytes, tplName: name, pdfW: info.viewW, pdfH: info.viewH, info: pageInfo(info.viewW, info.viewH) });
   if (!keep) s.placements = {};
-  toast(`Шаблон «${name}» завантажено`, 'ok');
-  await openEditor(mode);
   refresh(mode);
+  openEditor(mode);
+  return s.info + (info.pages > 1 ? ` · ${info.pages} стор., використовується 1-ша` : '');
 }
 
 const uploads = {
   single: mkUpload({
-    dzId: 'dz-tpl', inId: 'in-tpl', chId: 'ch-tpl', nmId: 'ch-tpl-name', rmId: 'rm-tpl',
+    dzId: 'dz-tpl', inId: 'in-tpl', chId: 'ch-tpl', nmId: 'ch-tpl-name', metaId: 'ch-tpl-meta', rmId: 'rm-tpl',
     exts: ['.pdf'], limit: LIMITS.pdf,
     onLoad: (b, n) => setTemplate('single', b, n),
-    onClear: () => { Object.assign(ST.single, { tpl: null, tplName: '', placements: {} }); refresh('single'); },
+    onClear: () => { Object.assign(ST.single, { tpl: null, tplName: '', placements: {}, info: '' }); refresh('single'); },
   }),
   bulk: mkUpload({
-    dzId: 'dz-bulk-tpl', inId: 'in-bulk-tpl', chId: 'ch-bulk-tpl', nmId: 'ch-bulk-tpl-name', rmId: 'rm-bulk-tpl',
+    dzId: 'dz-bulk-tpl', inId: 'in-bulk-tpl', chId: 'ch-bulk-tpl', nmId: 'ch-bulk-tpl-name', metaId: 'ch-bulk-tpl-meta', rmId: 'rm-bulk-tpl',
     exts: ['.pdf'], limit: LIMITS.pdf,
     onLoad: (b, n) => setTemplate('bulk', b, n),
-    onClear: () => { Object.assign(ST.bulk, { tpl: null, tplName: '', placements: {} }); refresh('bulk'); },
+    onClear: () => { Object.assign(ST.bulk, { tpl: null, tplName: '', placements: {}, info: '' }); refresh('bulk'); },
   }),
   sheet: mkUpload({
-    dzId: 'dz-excel', inId: 'in-excel', chId: 'ch-excel', nmId: 'ch-excel-name', rmId: 'rm-excel',
+    dzId: 'dz-excel', inId: 'in-excel', chId: 'ch-excel', nmId: 'ch-excel-name', metaId: 'ch-excel-meta', rmId: 'rm-excel',
     exts: ['.xlsx', '.xls', '.ods', '.csv'], limit: LIMITS.sheet,
     onLoad: bytes => loadSheet(bytes),
     onClear: () => { ST.rows = []; $('stbox').hidden = true; refresh('bulk'); },
@@ -252,9 +277,9 @@ $('btn-gen').addEventListener('click', async () => {
   const data = singleData(false);
   const missing = singleInputs.filter(id => !$(id).value.trim());
   singleInputs.forEach(id => $(id).classList.toggle('err', missing.includes(id)));
-  if (missing.length) { toast('⚠️ Заповніть усі обов\'язкові поля', 'err'); $(missing[0]).focus(); return; }
+  if (missing.length) { toast('Заповніть усі обов\'язкові поля', 'warn'); $(missing[0]).focus(); return; }
   if (ST.single.tpl && !Object.keys(ST.single.placements).length) {
-    toast('⚠️ Спочатку розмістіть поля на шаблоні', 'err'); openEditor('single'); return;
+    toast('Спочатку розмістіть поля на шаблоні', 'warn'); openEditor('single'); return;
   }
   if (ST.busy) return;
   ST.busy = true;
@@ -264,10 +289,10 @@ $('btn-gen').addEventListener('click', async () => {
     prog.set(90);
     download(new Blob([bytes], { type: 'application/pdf' }), `cert_${C.safeFileName(data.name)}_${data.num}.pdf`);
     counter.commit(Number(data.num));
-    toast(`✅ Сертифікат №${data.num} завантажено`, 'ok');
+    toast(`Сертифікат №${data.num} завантажено`, 'ok');
     refresh('single');
   } catch (e) {
-    console.error(e); toast('❌ ' + e.message, 'err', 6000);
+    console.error(e); toast(e.message, 'err', 6000);
   } finally { prog.done(); ST.busy = false; }
 });
 
@@ -277,46 +302,54 @@ async function loadSheet(bytes) {
   try {
     await loadScript(XLSX_URL);
     const wb = XLSX.read(bytes, { type: 'array', cellDates: true });
-    let res = null;
+    let res = null, sheet = '';
     for (const name of wb.SheetNames) {
       const rows = XLSX.utils.sheet_to_json(wb.Sheets[name], { defval: '', raw: false, dateNF: 'dd.mm.yyyy' });
       const r = C.mapRows(rows);
-      if (r.students.length) { res = r; break; }
+      if (r.students.length) { res = r; sheet = name; break; }
       res ||= r;
     }
     if (!res || !res.columns.name) throw new Error('Не знайдено колонку з іменами (name / ПІБ)');
     if (!res.students.length) throw new Error('У таблиці немає жодного студента');
     ST.rows = res.students;
     renderStudents(res);
-    toast(`✅ Завантажено: ${students(ST.rows.length)}`, 'ok');
+    toast(`Завантажено: ${students(ST.rows.length)}`, 'ok');
     refresh('bulk');
+    return wb.SheetNames.length > 1 ? `аркуш «${sheet}»` : '';
   } finally { prog.done(); }
 }
 
 function renderStudents({ students: list, incomplete, columns }) {
   $('st-count').textContent = students(list.length);
-  const warn = $('st-warn');
   const notes = [];
   if (!columns.period) notes.push('немає колонки «Період»');
   if (!columns.grade) notes.push('немає колонки «Грейд»');
   if (incomplete) notes.push(`${incomplete} ${plural(incomplete, 'рядок', 'рядки', 'рядків')} з порожніми полями`);
-  warn.hidden = !notes.length;
-  warn.textContent = notes.length ? '⚠️ ' + notes.join('; ') : '';
-  $('st-status').textContent = notes.length ? 'перевірте' : 'готово';
-  $('st-status').classList.toggle('warn', !!notes.length);
+  $('st-warn').hidden = !notes.length;
+  $('st-warn-text').textContent = notes.length ? notes.join('; ').replace(/^./, c => c.toUpperCase()) : '';
+  const status = $('st-status');
+  status.textContent = notes.length ? 'Перевірте' : 'Готово';
+  status.className = `badge ${notes.length ? 'badge-warn' : 'badge-ok'}`;
 
+  const cell = (cls, text, fallback) => {
+    const el = document.createElement('span');
+    el.setAttribute('role', 'cell');
+    el.className = cls + (text ? '' : ' roster-missing');
+    el.textContent = text || fallback;
+    if (text) el.title = text;
+    return el;
+  };
   const box = $('stl'), MAX = 300;
   box.replaceChildren(...list.slice(0, MAX).map((s, i) => {
     const row = document.createElement('div');
-    row.className = 'sr' + (!s.period || !s.grade ? ' sr-warn' : '');
-    const idx = document.createElement('span'); idx.className = 'si'; idx.textContent = i + 1;
-    const nm = document.createElement('span'); nm.className = 'sn'; nm.textContent = s.name; nm.title = [s.name, s.period].filter(Boolean).join(' · ');
-    const gr = document.createElement('span'); gr.className = 'sg'; gr.textContent = s.grade || '—';
-    row.append(idx, nm, gr);
+    row.className = 'roster-row' + (!s.period || !s.grade ? ' is-warn' : '');
+    row.setAttribute('role', 'row');
+    row.append(cell('roster-idx', String(i + 1)), cell('roster-name', s.name),
+      cell('roster-period', s.period, 'немає'), cell('roster-grade', s.grade, 'немає'));
     return row;
   }));
   if (list.length > MAX) {
-    const more = document.createElement('div'); more.className = 'sr-more';
+    const more = document.createElement('div'); more.className = 'roster-more';
     more.textContent = `…і ще ${list.length - MAX}`;
     box.append(more);
   }
@@ -328,10 +361,15 @@ $('btn-bulk').addEventListener('click', async () => {
   const rows = ST.rows, total = rows.length;
   if (!total || ST.busy) return;
   if (ST.bulk.tpl && !Object.keys(ST.bulk.placements).length) {
-    toast('⚠️ Спочатку розмістіть поля на шаблоні', 'err'); openEditor('bulk'); return;
+    toast('Спочатку розмістіть поля на шаблоні', 'warn'); openEditor('bulk'); return;
   }
   const incomplete = rows.filter(r => !r.period || !r.grade).length;
-  if (incomplete && !confirm(`${incomplete} з ${total} рядків мають порожній період або грейд — ці поля залишаться порожніми. Продовжити?`)) return;
+  if (incomplete && !await confirmDialog({
+    title: 'Є неповні рядки',
+    text: `${incomplete} з ${total} рядків мають порожній період або грейд. У цих сертифікатах відповідні поля залишаться порожніми.`,
+    ok: 'Згенерувати все',
+  })) return;
+  if (ST.busy) return;
 
   ST.busy = true; bulkCancel = false;
   const prog = progress(`Генерація 0 / ${total}…`, true);
@@ -358,11 +396,11 @@ $('btn-bulk').addEventListener('click', async () => {
       m => prog.set(86 + m.percent * 0.14));
     download(blob, `certificates_${ST.issueDate}_${first}-${first + total - 1}.zip`);
     counter.commit(first + total - 1);
-    toast(`✅ ${total} ${plural(total, 'сертифікат', 'сертифікати', 'сертифікатів')} у ZIP (№${first}–${first + total - 1})`, 'ok', 5000);
+    toast(`Готово: ${certs(total)} у ZIP (№${first}–${first + total - 1})`, 'ok', 5000);
     refresh('bulk'); refresh('single');
   } catch (e) {
     if (e.code !== 'CANCELLED') console.error(e);
-    toast((e.code === 'CANCELLED' ? '⏹ ' : '❌ ') + e.message, 'err', 6000);
+    toast(e.message, e.code === 'CANCELLED' ? 'info' : 'err', 6000);
   } finally { prog.done(); ST.busy = false; }
 });
 
@@ -389,7 +427,7 @@ function makePreview(boxId) {
         await page.render({ canvasContext: cvs.getContext('2d'), viewport: vp }).promise;
       } catch (e) { d.destroy(); if (e?.name !== 'RenderingCancelledException') throw e; return; }
       if (my !== seq) { d.destroy(); return; }
-      // Swap only when fully rendered → no flicker
+      // Swap only when fully rendered to avoid flicker
       box.querySelectorAll('canvas').forEach(c => c.remove());
       box.querySelector('.prev-ph').hidden = true;
       box.appendChild(cvs);
@@ -409,20 +447,24 @@ const refreshing = { single: 0, bulk: 0 };
 async function refresh(mode) {
   const my = ++refreshing[mode];
   updateSyncRows();
-  if (mode === 'bulk') $('btn-bulk').disabled = !ST.rows.length;
+  if (mode === 'bulk') {
+    $('btn-bulk').disabled = !ST.rows.length;
+    $('btn-bulk-label').textContent = ST.rows.length ? `Завантажити ZIP · ${certs(ST.rows.length)}` : 'Завантажити ZIP-архів';
+  }
   const s = ST[mode], hint = $(mode === 'single' ? 'prev-hint' : 'bulk-prev-hint');
+  hint.classList.remove('err');
   const needsPlacement = s.tpl && !Object.keys(s.placements).length;
 
   let data, label;
   if (mode === 'single') {
     data = singleData(true);
     label = data.name;
-    hint.textContent = needsPlacement ? '⚠️ Розмістіть поля на шаблоні' : 'Оновлюється автоматично';
+    hint.textContent = needsPlacement ? 'Розмістіть поля на шаблоні' : 'Оновлюється автоматично';
   } else {
     if (!ST.rows.length) { previews.bulk.clear(); ST.preview.bulk = null; hint.textContent = 'Перший запис з таблиці'; return; }
     data = { ...ST.rows[0], date: issueDateText(), num: String(counter.next()) };
     label = `${data.name} — зразок`;
-    hint.textContent = needsPlacement ? '⚠️ Розмістіть поля на шаблоні' : `Перший із ${students(ST.rows.length)}`;
+    hint.textContent = needsPlacement ? 'Розмістіть поля на шаблоні' : `Перший із ${students(ST.rows.length)}`;
   }
   hint.classList.toggle('warn', !!needsPlacement);
   try {
@@ -431,35 +473,42 @@ async function refresh(mode) {
     ST.preview[mode] = { bytes, label };
     await previews[mode].show(bytes);
   } catch (e) {
-    if (my === refreshing[mode]) { console.warn('preview:', e); hint.textContent = '❌ ' + e.message; }
+    if (my === refreshing[mode]) {
+      console.warn('preview:', e);
+      hint.textContent = e.message; hint.classList.remove('warn'); hint.classList.add('err');
+    }
   }
 }
 const refreshSingleSoon = debounce(() => refresh('single'), 250);
 
-['prev-box', 'bulk-prev-box'].forEach(id => {
-  const mode = id === 'prev-box' ? 'single' : 'bulk';
+[['prev-box', 'prev-open', 'single'], ['bulk-prev-box', 'bulk-prev-open', 'bulk']].forEach(([box, btn, mode]) => {
   const open = () => { const p = ST.preview[mode]; if (p) openLightbox(p.bytes, p.label); };
-  $(id).addEventListener('click', open);
-  $(id).addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open(); } });
+  $(box).addEventListener('click', open);
+  $(box).addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open(); } });
+  $(btn).addEventListener('click', open);
 });
 
-// ── Sync placements Single ↔ Bulk ─────────────────────
+// ── Sync placements Single / Bulk ───────────────────────
 function updateSyncRows() {
   $('sync-single-row').hidden = !(ST.single.tpl && Object.keys(ST.single.placements).length);
   $('sync-bulk-row').hidden = !(ST.bulk.tpl && Object.keys(ST.bulk.placements).length);
 }
-function copyLayout(from, to) {
+async function copyLayout(from, to) {
   const src = ST[from], dst = ST[to];
-  if (!Object.keys(src.placements).length) { toast('⚠️ Немає розміщених полів', 'err'); return; }
+  if (!Object.keys(src.placements).length) { toast('Немає розміщених полів', 'warn'); return; }
   if (!dst.tpl) {
-    Object.assign(dst, { tpl: src.tpl, tplName: src.tplName, pdfW: src.pdfW, pdfH: src.pdfH });
-    uploads[to].setName(`${src.tplName} (скопійовано)`);
+    Object.assign(dst, { tpl: src.tpl, tplName: src.tplName, pdfW: src.pdfW, pdfH: src.pdfH, info: src.info });
+    uploads[to].setName(src.tplName, `${src.info} · скопійовано`);
     uploads[to].show(true);
-  } else if (dst.tplName !== src.tplName && !confirm('У цільовій вкладці інший шаблон. Скопіювати розміщення полів (пропорційно)?')) {
+  } else if (dst.tpl !== src.tpl && !await confirmDialog({
+    title: 'Інший шаблон',
+    text: 'У цільовій вкладці завантажено інший шаблон. Скопіювати розміщення полів? Координати буде перенесено пропорційно.',
+    ok: 'Скопіювати',
+  })) {
     return;
   }
   dst.placements = C.clonePlacements(src.placements);
-  toast(`✅ ${fields(Object.keys(dst.placements).length)} скопійовано`, 'ok');
+  toast(`Скопійовано ${fields(Object.keys(dst.placements).length)} у вкладку «${to === 'bulk' ? 'Пакетна генерація' : 'Один сертифікат'}»`, 'ok');
   refresh(to);
 }
 $('btn-sync-to-bulk').addEventListener('click', () => copyLayout('single', 'bulk'));
@@ -493,7 +542,7 @@ async function openEditor(mode) {
     ED.page = await ED.doc.getPage(1);
   } catch (e) {
     console.error(e); closeEditorDoc();
-    toast('❌ Не вдалося відкрити шаблон у редакторі', 'err');
+    toast('Не вдалося відкрити шаблон у редакторі', 'err');
     return;
   }
   ED.mode = mode;
@@ -509,7 +558,10 @@ async function openEditor(mode) {
   const fit = Math.min(availW / vp0.width, availH / vp0.height);
   ED.baseW = vp0.width * fit; ED.baseH = vp0.height * fit;
   ED.zoom = 1;
-  $('zoom-info').textContent = `${Math.round(vp0.width)}×${Math.round(vp0.height)} pt`;
+  $('zoom-info').textContent = `${s.tplName} · ${pageInfo(vp0.width, vp0.height)}`;
+  $('modal-title').textContent = mode === 'bulk' ? 'Розміщення полів — пакетна генерація' : 'Розміщення полів — один сертифікат';
+  // blank the canvas so the previous template never flashes
+  const cvs = $('editor-canvas'); cvs.width = 1; cvs.height = 1;
 
   hideToolbar(); setArmed(null);
   Object.values(ED.markers).forEach(m => m.remove());
@@ -526,6 +578,15 @@ function closeEditorDoc() {
   ED.doc?.destroy(); ED.doc = null; ED.page = null;
 }
 
+const editorDirty = () => ED.mode && JSON.stringify(C.clonePlacements(P())) !== JSON.stringify(ED.snapshot);
+async function cancelEditor() {
+  if (editorDirty() && !await confirmDialog({
+    title: 'Закрити без збереження?',
+    text: 'Зміни в розміщенні полів буде втрачено.',
+    ok: 'Не зберігати', cancel: 'Повернутися', danger: true,
+  })) return;
+  closeEditor(false);
+}
 function closeEditor(commit) {
   if (!ED.mode) return;
   const mode = ED.mode;
@@ -537,12 +598,13 @@ function closeEditor(commit) {
   ED.mode = null;
   if (commit) {
     const n = Object.keys(ST[mode].placements).length;
-    toast(n ? `✅ ${fields(n)} збережено` : '⚠️ Жодного поля не розміщено', n ? 'ok' : 'err');
+    toast(n ? `Розміщення збережено: ${fields(n)}` : 'Жодного поля не розміщено — шаблон буде без тексту', n ? 'ok' : 'warn');
   }
   refresh(mode);
   ED.returnFocus?.focus?.();
 }
-$('modal-x').addEventListener('click', () => closeEditor(false));
+$('modal-x').addEventListener('click', cancelEditor);
+$('modal-cancel').addEventListener('click', cancelEditor);
 $('modal-ok').addEventListener('click', () => closeEditor(true));
 $('modal-reset').addEventListener('click', () => {
   FIELD_KEYS.forEach(f => removeField(f));
@@ -636,26 +698,29 @@ function buildFieldItems() {
   list.replaceChildren();
   for (const f of FIELD_KEYS) {
     const item = document.createElement('div');
-    item.className = 'fi'; item.id = `fi-${f}`; item.dataset.f = f;
+    item.className = `fi f-${f}`; item.id = `fi-${f}`; item.dataset.f = f;
     item.innerHTML = `
       <div class="fi-top" role="button" tabindex="0">
+        <span class="fi-icon">${icon(FIELD_ICONS[f])}</span>
         <span class="fi-lbl"></span>
-        <span class="fi-badge">Не розміщено</span>
+        <span class="fi-status">Не розміщено</span>
       </div>
       <div class="fi-settings">
-        <div class="fi-sz-ctrl">
-          <button type="button" class="fi-sz-btn" data-a="sz-" aria-label="Менший шрифт">−</button>
-          <span class="fi-sz-val">12</span>
-          <button type="button" class="fi-sz-btn" data-a="sz+" aria-label="Більший шрифт">+</button>
+        <div class="ctl-group" role="group" aria-label="Розмір шрифту">
+          <button type="button" class="ctl" data-a="sz-" aria-label="Менший шрифт" title="Менший шрифт">${icon('minus')}</button>
+          <span class="ctl-val fi-sz-val">12</span>
+          <button type="button" class="ctl" data-a="sz+" aria-label="Більший шрифт" title="Більший шрифт">${icon('plus')}</button>
         </div>
-        <input type="color" class="fi-color" value="#111111" aria-label="Колір"/>
-        <button type="button" class="fi-bold-btn" data-a="bold" aria-label="Жирний">B</button>
-        <div class="fi-align-ctrl">
-          <button type="button" class="fi-al-btn" data-a="al-left" title="По лівому краю" aria-label="По лівому краю">⇤</button>
-          <button type="button" class="fi-al-btn" data-a="al-center" title="По центру" aria-label="По центру">⊡</button>
-          <button type="button" class="fi-al-btn" data-a="al-right" title="По правому краю" aria-label="По правому краю">⇥</button>
+        <input type="color" class="ctl-color fi-color" value="#111111" aria-label="Колір тексту" title="Колір тексту"/>
+        <div class="ctl-group">
+          <button type="button" class="ctl ctl-bold fi-bold" data-a="bold" aria-label="Жирний" title="Жирний" aria-pressed="false">B</button>
         </div>
-        <button type="button" class="fi-del-btn" data-a="del" title="Видалити" aria-label="Видалити поле">✕</button>
+        <div class="ctl-group" role="group" aria-label="Вирівнювання">
+          <button type="button" class="ctl fi-al" data-a="al-left" aria-label="По лівому краю" title="По лівому краю">${icon('al-left')}</button>
+          <button type="button" class="ctl fi-al" data-a="al-center" aria-label="По центру" title="По центру">${icon('al-center')}</button>
+          <button type="button" class="ctl fi-al" data-a="al-right" aria-label="По правому краю" title="По правому краю">${icon('al-right')}</button>
+        </div>
+        <button type="button" class="ctl-del" data-a="del" aria-label="Видалити поле" title="Видалити поле">${icon('trash')}</button>
       </div>`;
     item.querySelector('.fi-lbl').textContent = FIELDS[f].label;
     const top = item.querySelector('.fi-top');
@@ -683,12 +748,16 @@ function syncFieldItem(f) {
   const item = $(`fi-${f}`); if (!item) return;
   const p = P()[f];
   item.classList.toggle('placed', !!p);
-  item.querySelector('.fi-badge').textContent = p ? '✓ Розміщено' : 'Не розміщено';
+  item.querySelector('.fi-status').textContent = p ? 'Розміщено' : 'Не розміщено';
   if (!p) return;
   item.querySelector('.fi-sz-val').textContent = p.size;
-  item.querySelector('.fi-bold-btn').classList.toggle('on', p.bold);
+  const b = item.querySelector('.fi-bold');
+  b.classList.toggle('on', p.bold); b.setAttribute('aria-pressed', p.bold);
   item.querySelector('.fi-color').value = p.color;
-  item.querySelectorAll('.fi-al-btn').forEach(b => b.classList.toggle('on', b.dataset.a === 'al-' + p.align));
+  item.querySelectorAll('.fi-al').forEach(x => {
+    const on = x.dataset.a === 'al-' + p.align;
+    x.classList.toggle('on', on); x.setAttribute('aria-pressed', on);
+  });
 }
 
 function setArmed(f) {
@@ -696,14 +765,14 @@ function setArmed(f) {
   document.querySelectorAll('.fi').forEach(el => el.classList.toggle('armed', el.dataset.f === f));
   $('arm-hint').hidden = !f;
   $('canvas-host').classList.toggle('armed-mode', !!f);
-  if (f) { $('arm-hint-text').textContent = `Клікніть на шаблоні → ${FIELDS[f].label}`; hideToolbar(); }
+  if (f) { $('arm-hint-text').textContent = `Клікніть на шаблоні, щоб розмістити поле «${FIELDS[f].label}»`; hideToolbar(); }
   else hideGuides();
 }
 
 function updatePlacedInfo() {
   const keys = FIELD_KEYS.filter(f => P()[f]);
   $('placed-info').textContent = keys.length
-    ? `✓ Розміщено: ${keys.map(f => FIELDS[f].label).join(', ')}`
+    ? `Розміщено ${keys.length} з ${FIELD_KEYS.length}: ${keys.map(f => FIELDS[f].label).join(', ')}`
     : 'Нічого не розміщено';
 }
 
@@ -763,7 +832,7 @@ function updateMarkerTexts() {
 function renderMarker(f) {
   ED.markers[f]?.remove();
   const el = document.createElement('div');
-  el.className = `marker m-${f}`;
+  el.className = `marker f-${f}`;
   el.dataset.f = f;
   el.tabIndex = 0;
   el.setAttribute('role', 'button');
@@ -788,7 +857,7 @@ function layoutMarker(f) {
   t.style.fontSize = (p.size * pxPerPt) + 'px';
   t.style.fontWeight = p.bold ? '700' : '400';
   t.style.color = p.color;
-  el.querySelector('.mk-tag').textContent = `${FIELDS[f].label} · ${p.size}pt`;
+  el.querySelector('.mk-tag').textContent = `${FIELDS[f].label} · ${p.size} pt`;
   el.classList.toggle('al-left', p.align === 'left');
   el.classList.toggle('al-right', p.align === 'right');
 }
@@ -825,6 +894,7 @@ function startMarkerDrag(e, f) {
 
 function startChipDrag(e, f, chip) {
   if (e.button !== 0) return;
+  chip._dragged = false;
   const sx = e.clientX, sy = e.clientY;
   let dragging = false;
   const move = ev => {
@@ -886,8 +956,12 @@ function syncToolbar() {
   TB.querySelector('.mtb-lbl').textContent = FIELDS[f].label;
   TB.querySelector('.mtb-sz').textContent = p.size;
   TB.querySelector('.mtb-color').value = p.color;
-  TB.querySelector('.mtb-b').classList.toggle('on', p.bold);
-  TB.querySelectorAll('.mtb-al').forEach(b => b.classList.toggle('on', b.dataset.a === 'al-' + p.align));
+  const b = TB.querySelector('.mtb-b');
+  b.classList.toggle('on', p.bold); b.setAttribute('aria-pressed', p.bold);
+  TB.querySelectorAll('.mtb-al').forEach(x => {
+    const on = x.dataset.a === 'al-' + p.align;
+    x.classList.toggle('on', on); x.setAttribute('aria-pressed', on);
+  });
   const xi = $('mtb-xi'), yi = $('mtb-yi');
   xi.max = Math.round(s.pdfW); yi.max = Math.round(s.pdfH);
   if (document.activeElement !== xi) xi.value = Math.round(p.x * s.pdfW);
@@ -902,7 +976,9 @@ function positionToolbar() {
   const below = r.top - h - tag - 14 < 8;
   TB.classList.toggle('below', below);
   TB.style.top = (below ? r.bottom + 12 : r.top - h - tag - 12) + 'px';
-  TB.style.left = Math.max(8, Math.min(r.left + r.width / 2 - w / 2, window.innerWidth - w - 8)) + 'px';
+  const left = Math.max(8, Math.min(r.left + r.width / 2 - w / 2, window.innerWidth - w - 8));
+  TB.style.left = left + 'px';
+  TB.style.setProperty('--arrow-x', C.clamp(r.left + r.width / 2 - left, 16, w - 16) + 'px');
 }
 TB.addEventListener('pointerdown', e => e.stopPropagation());
 TB.addEventListener('click', e => {
@@ -925,11 +1001,11 @@ window.addEventListener('resize', debounce(() => { if (ED.selected) positionTool
 // ── Presets ───────────────────────────────────────────
 $('btn-export-preset').addEventListener('click', () => {
   const s = ST[ED.mode];
-  if (!Object.keys(s.placements).length) { toast('⚠️ Спочатку розмістіть хоча б одне поле', 'err'); return; }
+  if (!Object.keys(s.placements).length) { toast('Спочатку розмістіть хоча б одне поле', 'warn'); return; }
   const preset = C.buildPreset(s.placements, { template: s.tplName, pdfW: s.pdfW, pdfH: s.pdfH });
   const base = C.safeFileName((s.tplName || 'preset').replace(/\.[^.]+$/, ''), 'preset');
   download(new Blob([JSON.stringify(preset, null, 2)], { type: 'application/json' }), `preset_${base}_${todayISO()}.json`);
-  toast(`✅ Пресет збережено: ${fields(Object.keys(s.placements).length)}`, 'ok');
+  toast(`Пресет збережено: ${fields(Object.keys(s.placements).length)}`, 'ok');
 });
 $('btn-import-preset').addEventListener('click', () => $('in-preset').click());
 $('in-preset').addEventListener('change', async e => {
@@ -943,8 +1019,13 @@ $('in-preset').addEventListener('change', async e => {
     const { placements, pdfSize, template } = C.parsePreset(obj);
     const s = ST[ED.mode];
     if (pdfSize && (Math.abs(pdfSize.w / pdfSize.h - s.pdfW / s.pdfH) > 0.03)) {
-      if (!confirm(`Пропорції шаблону в пресеті (${pdfSize.w}×${pdfSize.h} pt) відрізняються від поточного `
-        + `(${Math.round(s.pdfW)}×${Math.round(s.pdfH)} pt). Координати буде масштабовано. Продовжити?`)) return;
+      if (!await confirmDialog({
+        title: 'Інші пропорції шаблону',
+        text: `Пресет створено для шаблону ${pdfSize.w}×${pdfSize.h} pt, а поточний — ${pageInfo(s.pdfW, s.pdfH)}. `
+          + 'Координати буде перенесено пропорційно — перевірте розміщення.',
+        ok: 'Застосувати',
+      })) return;
+      if (!ED.mode) return;
     }
     FIELD_KEYS.forEach(f => removeField(f));
     for (const f of FIELD_KEYS) {
@@ -957,8 +1038,8 @@ $('in-preset').addEventListener('change', async e => {
     }
     updatePlacedInfo();
     const n = Object.keys(placements).length;
-    toast(`✅ Завантажено ${fields(n)}${template && template !== 'unknown' ? ` (з «${template}»)` : ''}`, 'ok');
-  } catch (err) { toast('❌ ' + err.message, 'err'); }
+    toast(`Пресет застосовано: ${fields(n)}${template && template !== 'unknown' ? ` (з «${template}»)` : ''}`, 'ok');
+  } catch (err) { toast(err.message, 'err'); }
 });
 
 // ══════════════════════════════════════════════════════
@@ -984,7 +1065,7 @@ async function openLightbox(bytes, label) {
     LB.zoom = 1;
     await lbRender();
   } catch (e) {
-    console.error('lightbox:', e); toast('❌ Не вдалося показати перегляд', 'err'); closeLightbox();
+    console.error('lightbox:', e); toast('Не вдалося показати перегляд', 'err'); closeLightbox();
   }
 }
 async function lbRender() {
@@ -1032,7 +1113,7 @@ $('lb-zoom-out').addEventListener('click', () => lbZoom(-1));
 $('lb-zoom-fit').addEventListener('click', () => lbZoom(0));
 $('lb-body').addEventListener('click', e => { if (e.target === $('lb-body') || e.target === $('lb-wrap')) closeLightbox(); });
 $('lb-body').addEventListener('wheel', e => {
-  // Ctrl/⌘ + wheel always zooms; plain wheel zooms only while the page fits (otherwise it scrolls)
+  // Ctrl/Cmd + wheel always zooms; plain wheel zooms only while the page fits (otherwise it scrolls)
   const b = $('lb-body'), overflow = b.scrollHeight > b.clientHeight + 1 || b.scrollWidth > b.clientWidth + 1;
   if (!e.ctrlKey && !e.metaKey && overflow) return;
   e.preventDefault(); lbZoom(e.deltaY < 0 ? 1 : -1);
@@ -1051,6 +1132,12 @@ function trapFocus(e, container) {
 }
 
 document.addEventListener('keydown', e => {
+  // Confirm dialog (always on top)
+  if (!$('dialog').hidden) {
+    if (e.key === 'Escape') { e.preventDefault(); DLG.resolve?.(false); }
+    else if (e.key === 'Tab') trapFocus(e, $('dialog'));
+    return;
+  }
   // Lightbox
   if (!$('lightbox').hidden) {
     if (e.key === 'Escape') { e.preventDefault(); closeLightbox(); }
@@ -1071,7 +1158,7 @@ document.addEventListener('keydown', e => {
     e.preventDefault();
     if (ED.armed) setArmed(null);
     else if (ED.selected) { const f = ED.selected; hideToolbar(); ED.markers[f]?.focus(); }
-    else closeEditor(false);
+    else cancelEditor();
     return;
   }
   const typing = ['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement?.tagName);
@@ -1102,12 +1189,14 @@ function progress(msg, cancellable = false) {
   const timer = setTimeout(() => { if (my === progToken) $('prog-overlay').hidden = false; }, 150);
   $('prog-msg').textContent = msg;
   $('prog-bar').style.width = '0%';
+  $('prog-pct').textContent = '0%';
   $('prog-box').setAttribute('aria-valuenow', 0);
   $('prog-cancel').hidden = !cancellable;
   return {
     set(pct, m, canCancel) {
       if (my !== progToken) return;
       $('prog-bar').style.width = pct + '%';
+      $('prog-pct').textContent = Math.round(pct) + '%';
       $('prog-box').setAttribute('aria-valuenow', Math.round(pct));
       if (m) $('prog-msg').textContent = m;
       if (canCancel === false) $('prog-cancel').hidden = true;
@@ -1123,13 +1212,41 @@ function progress(msg, cancellable = false) {
 $('prog-cancel').addEventListener('click', () => { bulkCancel = true; $('prog-msg').textContent = 'Скасування…'; });
 
 let toastTimer;
-function toast(msg, type = '', ms = 3500) {
+const TOAST_ICONS = { ok: 'ok', err: 'err', warn: 'warn', info: 'info' };
+/** type: 'ok' | 'err' | 'warn' | 'info' */
+function toast(msg, type = 'info', ms = 3500) {
   const el = $('toast');
-  el.textContent = msg;
+  $('toast-text').textContent = msg;
+  el.querySelector('use').setAttribute('href', `#i-${TOAST_ICONS[type] || 'info'}`);
   el.className = `toast show ${type}`;
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => el.classList.remove('show'), ms);
 }
+
+// ── Confirm dialog (replaces window.confirm) ──────────
+const DLG = { resolve: null };
+function confirmDialog({ title, text, ok = 'Продовжити', cancel = 'Скасувати', danger = false }) {
+  DLG.resolve?.(false);
+  const prevFocus = document.activeElement;
+  $('dlg-title').textContent = title;
+  $('dlg-text').textContent = text;
+  $('dlg-ok').textContent = ok;
+  $('dlg-ok').className = `btn ${danger ? 'btn-danger' : 'btn-primary'}`;
+  $('dlg-cancel').textContent = cancel;
+  $('dialog').hidden = false;
+  $('dlg-ok').focus();
+  return new Promise(res => {
+    DLG.resolve = v => {
+      DLG.resolve = null;
+      $('dialog').hidden = true;
+      prevFocus?.focus?.();
+      res(v);
+    };
+  });
+}
+$('dlg-ok').addEventListener('click', () => DLG.resolve?.(true));
+$('dlg-cancel').addEventListener('click', () => DLG.resolve?.(false));
+$('dialog').addEventListener('mousedown', e => { if (e.target === $('dialog')) DLG.resolve?.(false); });
 
 window.addEventListener('beforeunload', e => { if (ST.busy) { e.preventDefault(); e.returnValue = ''; } });
 window.addEventListener('resize', debounce(() => { refresh('single'); if (ST.rows.length) refresh('bulk'); }, 300));
